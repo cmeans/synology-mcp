@@ -1,0 +1,10 @@
+# Minimal config — just host + one module.
+# Credentials come from the keyring (populated by `synology-mcp setup`).
+schema_version: 1
+
+connection:
+  host: 192.168.1.100
+
+modules:
+  filestation:
+    enabled: true

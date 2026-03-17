@@ -1,0 +1,21 @@
+# Power user config — HTTPS, custom settings, logging.
+schema_version: 1
+instance_id: nas-primary
+
+connection:
+  host: nas.local
+  port: 5001
+  https: true
+  verify_ssl: false  # Self-signed cert
+
+modules:
+  filestation:
+    enabled: true
+    permission: write
+    settings:
+      file_type_indicator: text
+      async_timeout: 180
+
+logging:
+  level: debug
+  file: ~/.local/state/synology-mcp/nas-primary/server.log

@@ -1,0 +1,67 @@
+"""Shared test fixtures."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from synology_mcp.core.client import DsmClient
+from synology_mcp.core.config import AppConfig
+from synology_mcp.core.state import ApiInfoEntry
+
+BASE_URL = "http://nas:5000"
+
+
+def make_test_config(**overrides: Any) -> AppConfig:
+    """Create a test config with sensible defaults."""
+    raw: dict[str, Any] = {
+        "schema_version": 1,
+        "instance_id": "test",
+        "connection": {"host": "nas", "port": 5000},
+        "modules": {
+            "filestation": {
+                "enabled": True,
+                "permission": "write",
+                "settings": {
+                    "hide_recycle_in_listings": True,
+                    "file_type_indicator": "emoji",
+                    "async_timeout": 120,
+                },
+            }
+        },
+    }
+    raw.update(overrides)
+    return AppConfig(**raw)
+
+
+def make_api_cache() -> dict[str, ApiInfoEntry]:
+    """Create a mock API info cache with File Station APIs."""
+    return {
+        "SYNO.API.Auth": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=7),
+        "SYNO.FileStation.Info": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.List": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.Search": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.DirSize": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.CreateFolder": ApiInfoEntry(
+            path="entry.cgi", min_version=1, max_version=2
+        ),
+        "SYNO.FileStation.Rename": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+        "SYNO.FileStation.CopyMove": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=3),
+        "SYNO.FileStation.Delete": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+    }
+
+
+@pytest.fixture
+def mock_config() -> AppConfig:
+    """Provide a test config."""
+    return make_test_config()
+
+
+@pytest.fixture
+async def mock_client() -> DsmClient:  # type: ignore[misc]
+    """Provide a DsmClient with a mocked API cache."""
+    client = DsmClient(base_url=BASE_URL)
+    client._api_cache = make_api_cache()
+    async with client:
+        yield client  # type: ignore[misc]

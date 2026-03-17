@@ -1,0 +1,253 @@
+"""Tests for core/auth.py — auth flows, credential resolution, re-auth."""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+import respx
+
+from synology_mcp.core.auth import AuthManager
+from synology_mcp.core.client import DsmClient
+from synology_mcp.core.config import AppConfig
+from synology_mcp.core.errors import AuthenticationError
+from synology_mcp.core.state import ApiInfoEntry
+
+BASE_URL = "http://nas:5000"
+
+
+def _make_config(**overrides: Any) -> AppConfig:
+    raw: dict[str, Any] = {
+        "schema_version": 1,
+        "connection": {"host": "nas", "port": 5000},
+        "modules": {"filestation": {"enabled": True}},
+    }
+    raw.update(overrides)
+    return AppConfig(**raw)
+
+
+def _make_client() -> DsmClient:
+    client = DsmClient(base_url=BASE_URL)
+    client._api_cache = {
+        "SYNO.API.Auth": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=7),
+        "SYNO.FileStation.List": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2),
+    }
+    return client
+
+
+def _no_keyring() -> MagicMock:
+    """Return a mock keyring module where get_password raises."""
+    mock = MagicMock()
+    mock.get_password.side_effect = Exception("No keyring backend")
+    return mock
+
+
+def _keyring_with(
+    username: str | None = None,
+    password: str | None = None,
+    device_id: str | None = None,
+) -> MagicMock:
+    """Return a mock keyring module that returns specific values."""
+    mock = MagicMock()
+    mock.get_password.side_effect = lambda _svc, key: {
+        "username": username,
+        "password": password,
+        "device_id": device_id,
+    }.get(key)
+    return mock
+
+
+def _clean_env() -> dict[str, str]:
+    """Return env dict with all SYNOLOGY_ vars removed."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
+
+
+class TestCredentialResolution:
+    def test_credentials_from_config(self) -> None:
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("synology_mcp.core.auth.kr", _no_keyring()),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "admin"
+        assert password == "secret"
+        assert device_id is None
+
+    def test_credentials_from_env(self) -> None:
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "env_user",
+            "SYNOLOGY_PASSWORD": "env_pass",
+            "SYNOLOGY_DEVICE_ID": "env_device",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("synology_mcp.core.auth.kr", _no_keyring()),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "env_user"
+        assert password == "env_pass"
+        assert device_id == "env_device"
+
+    def test_credentials_from_keyring(self) -> None:
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch(
+                "synology_mcp.core.auth.kr",
+                _keyring_with("kr_user", "kr_pass", "kr_device"),
+            ),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "kr_user"
+        assert password == "kr_pass"
+        assert device_id == "kr_device"
+
+    def test_no_credentials_raises(self) -> None:
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            pytest.raises(AuthenticationError, match="No credentials"),
+        ):
+            auth._resolve_credentials()
+
+
+class TestLogin:
+    @respx.mock
+    async def test_simple_login(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "test-sid-123"}}
+        )
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("synology_mcp.core.auth.kr", _no_keyring()),
+            ):
+                sid = await auth.login()
+
+        assert sid == "test-sid-123"
+
+    @respx.mock
+    async def test_login_with_device_id(self) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "2fa-sid-456"}}
+        )
+
+        config = _make_config(
+            auth={"username": "admin", "password": "secret", "device_id": "dev123"}
+        )
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("synology_mcp.core.auth.kr", _no_keyring()),
+            ):
+                sid = await auth.login()
+
+        assert sid == "2fa-sid-456"
+        request_params = dict(route.calls[0].request.url.params)
+        assert request_params["device_id"] == "dev123"
+
+    @respx.mock
+    async def test_2fa_required_without_device_id(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 403}}
+        )
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("synology_mcp.core.auth.kr", _no_keyring()),
+                pytest.raises(AuthenticationError, match="2FA"),
+            ):
+                await auth.login()
+
+
+class TestReAuth:
+    @respx.mock
+    async def test_re_auth_on_session_expired(self) -> None:
+        call_count = 0
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            params = dict(request.url.params)
+            if params.get("method") == "list_share" and call_count == 1:
+                return httpx.Response(200, json={"success": False, "error": {"code": 106}})
+            if params.get("method") == "login":
+                return httpx.Response(200, json={"success": True, "data": {"sid": "new-sid"}})
+            return httpx.Response(200, json={"success": True, "data": {"shares": []}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            AuthManager(config, client)
+            client.sid = "old-sid"
+
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("synology_mcp.core.auth.kr", _no_keyring()),
+            ):
+                data = await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert "shares" in data
+
+    @respx.mock
+    async def test_get_session_returns_existing(self) -> None:
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            client.sid = "existing-sid"
+            sid = await auth.get_session()
+        assert sid == "existing-sid"
+
+    @respx.mock
+    async def test_get_session_logs_in_when_no_sid(self) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"sid": "fresh-sid"}}
+        )
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        async with _make_client() as client:
+            auth = AuthManager(config, client)
+            with (
+                patch.dict(os.environ, _clean_env(), clear=True),
+                patch("synology_mcp.core.auth.kr", _no_keyring()),
+            ):
+                sid = await auth.get_session()
+        assert sid == "fresh-sid"
+
+
+class TestSessionNaming:
+    def test_session_name_format(self) -> None:
+        config = _make_config(instance_id="test-nas")
+        client = _make_client()
+        auth = AuthManager(config, client)
+        assert auth._session_name.startswith("SynologyMCP_test-nas_")
+        uuid_part = auth._session_name.split("_")[-1]
+        assert len(uuid_part) == 8

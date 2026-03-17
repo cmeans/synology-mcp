@@ -1,0 +1,12 @@
+# Copy this file to integration_config.yaml and fill in your NAS details.
+# This file is .gitignored to avoid committing credentials.
+schema_version: 1
+
+connection:
+  host: YOUR_NAS_IP
+  port: 5000
+
+modules:
+  filestation:
+    enabled: true
+    permission: read

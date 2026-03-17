@@ -1,0 +1,8 @@
+# Docker deployment — connection details from environment variables.
+# Set: SYNOLOGY_HOST, SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD, SYNOLOGY_DEVICE_ID
+schema_version: 1
+
+modules:
+  filestation:
+    enabled: true
+    permission: write
