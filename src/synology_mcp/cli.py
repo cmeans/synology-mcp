@@ -6,12 +6,17 @@ import asyncio
 import logging
 import os
 import sys
+from pathlib import Path
+from typing import Any
 
 import click
+import yaml
 
 from synology_mcp import __version__
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+_CONFIG_DIR = Path.home() / ".config" / "synology-mcp"
 
 
 def _init_early_logging(*, verbose: bool = False) -> None:
@@ -40,14 +45,14 @@ def _configure_logging(level: str, log_file: str | None = None) -> None:
         root.addHandler(file_handler)
 
 
-@click.group()
-@click.version_option(version=__version__, prog_name="synology-mcp")
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.version_option(__version__, "-v", "--version", prog_name="synology-mcp")
 def main() -> None:
     """synology-mcp — MCP server for Synology NAS."""
 
 
 @main.command()
-@click.option("--config", type=click.Path(), help="Path to config file")
+@click.option("-c", "--config", type=click.Path(), help="Path to config file")
 def serve(config: str | None) -> None:
     """Start the MCP server (launched by Claude Desktop)."""
     _init_early_logging()
@@ -58,7 +63,7 @@ def serve(config: str | None) -> None:
     try:
         app_config = load_config(config)
     except (FileNotFoundError, ValueError) as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 
     _configure_logging(app_config.logging.level, app_config.logging.file)
@@ -68,50 +73,317 @@ def serve(config: str | None) -> None:
 
 
 @main.command()
-@click.option("--config", type=click.Path(), help="Path to config file")
-@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
-def setup(config: str | None, verbose: bool) -> None:
+@click.option("-c", "--config", type=click.Path(), help="Path to config file")
+@click.option("-l", "--list", "list_configs", is_flag=True, help="List existing configurations")
+@click.option("--verbose", is_flag=True, help="Enable debug logging")
+def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     """Interactive credential setup and 2FA bootstrap."""
     _init_early_logging(verbose=verbose)
 
+    if list_configs:
+        _list_configurations()
+        return
+
+    # If --config is given, use the existing config-file flow
+    if config:
+        _setup_with_config(config, verbose)
+        return
+
+    # Try to load an existing config via discovery
     from synology_mcp.core.config import load_config
 
     try:
-        app_config = load_config(config)
-    except (FileNotFoundError, ValueError) as e:
-        click.echo(f"Error: {e}", err=True)
+        app_config = load_config(None)
+    except FileNotFoundError:
+        # No config file found — enter interactive creation mode
+        _setup_interactive(verbose)
+        return
+    except ValueError as e:
+        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
+
+    # Config file exists — do credential setup against it
+    _setup_credential_flow(app_config, verbose)
+
+
+def _list_configurations() -> None:
+    """List existing configuration files in the config directory."""
+    if not _CONFIG_DIR.exists():
+        click.echo("No configurations found.")
+        click.echo(f"Config directory: {_CONFIG_DIR}")
+        return
+
+    yaml_files = sorted(_CONFIG_DIR.glob("*.yaml"))
+    if not yaml_files:
+        click.echo("No configurations found.")
+        click.echo(f"Config directory: {_CONFIG_DIR}")
+        return
+
+    click.echo(f"Configurations in {_CONFIG_DIR}:\n")
+    for f in yaml_files:
+        try:
+            raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            host = raw.get("connection", {}).get("host", "?")
+            alias = raw.get("alias", "")
+            instance_id = raw.get("instance_id", f.stem)
+            label = alias or instance_id
+            click.echo(f"  {f.name}")
+            click.echo(f"    Name: {label}")
+            click.echo(f"    Host: {host}")
+            click.echo()
+        except Exception:  # noqa: BLE001
+            click.echo(f"  {f.name}  (could not parse)")
+
+
+def _setup_interactive(verbose: bool) -> None:
+    """Interactive setup when no config file exists."""
+    click.echo("No configuration file found. Let's create one.\n")
+
+    # Prompt for connection details
+    host = click.prompt("NAS host (IP or hostname)")
+    use_https = click.confirm("Use HTTPS?", default=False)
+    permission = click.prompt(
+        "File Station permission",
+        type=click.Choice(["read", "write"]),
+        default="read",
+    )
+
+    # Derive instance_id for file naming
+    from synology_mcp.core.config import _derive_instance_id
+
+    instance_id = _derive_instance_id(host)
+
+    # Prompt for alias
+    alias_input = click.prompt("Alias (friendly name, optional)", default="", show_default=False)
+    alias: str | None = alias_input.strip() or None
+
+    # Build config dict
+    conn: dict[str, Any] = {"host": host}
+    if use_https:
+        conn["https"] = True
+        conn["verify_ssl"] = click.confirm("Verify SSL certificate?", default=False)
+
+    config_dict: dict[str, Any] = {
+        "schema_version": 1,
+        "instance_id": instance_id,
+        "connection": conn,
+        "modules": {
+            "filestation": {
+                "enabled": True,
+                "permission": permission,
+            }
+        },
+    }
+    if alias:
+        config_dict["alias"] = alias
+
+    # Validate before writing
+    from synology_mcp.core.config import AppConfig
+
+    try:
+        app_config = AppConfig(**config_dict)
+    except ValueError as e:
+        click.echo(click.style(f"Config validation failed: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+    # Prompt for credentials
+    click.echo()
+    username = click.prompt("DSM username")
+    password = click.prompt("DSM password", hide_input=True)
+
+    # Store in keyring
+    service = f"synology-mcp/{instance_id}"
+    keyring_ok = _store_keyring(service, username, password)
+    if not keyring_ok:
+        return
+
+    # Connect, validate login, fetch hostname
+    click.echo("\nConnecting to NAS...")
+    result = asyncio.run(_connect_and_login(app_config, username, password, service, verbose))
+    if not result["success"]:
+        return
+
+    # Suggest hostname as alias if we fetched one and user didn't set an alias
+    nas_hostname = result.get("hostname")
+    if nas_hostname and not alias:
+        use_hostname = click.confirm(
+            f'NAS reports hostname "{nas_hostname}". Use as alias?', default=True
+        )
+        if use_hostname:
+            alias = nas_hostname
+            config_dict["alias"] = alias
+            # Re-validate
+            app_config = AppConfig(**config_dict)
+
+    # Check for existing file before writing
+    config_path = _CONFIG_DIR / f"{instance_id}.yaml"
+    if config_path.exists() and not click.confirm(
+        f"\n{config_path} already exists. Overwrite?", default=False
+    ):
+        click.echo("Aborted.")
+        return
+
+    # Write config file
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    raw_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    header = "# Generated by synology-mcp setup\n"
+    config_path.write_text(header + raw_yaml, encoding="utf-8")
+    click.echo(f"\nConfig written to {config_path}")
+
+    # Emit Claude Desktop JSON snippet
+    _emit_claude_desktop_snippet(app_config, config_path)
+
+
+def _setup_with_config(config_path_str: str, verbose: bool) -> None:
+    """Setup using an explicit config file path."""
+    from synology_mcp.core.config import load_config
+
+    try:
+        app_config = load_config(config_path_str)
+    except (FileNotFoundError, ValueError) as e:
+        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+    _setup_credential_flow(app_config, verbose)
+
+
+def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
+    """Credential setup flow for an existing config."""
+    from synology_mcp.core.config import AppConfig
+
+    assert isinstance(app_config, AppConfig)
 
     if not verbose:
         _configure_logging(app_config.logging.level, app_config.logging.file)
 
     assert app_config.connection is not None
-    click.echo(f"Setting up credentials for {app_config.connection.host}")
-    click.echo(f"Instance: {app_config.instance_id}")
+    click.echo(f"Setting up credentials for {app_config.display_name}")
+    click.echo(f"  Host: {app_config.connection.host}")
+    click.echo(f"  Instance: {app_config.instance_id}")
     click.echo()
 
     username = click.prompt("DSM username")
     password = click.prompt("DSM password", hide_input=True)
 
-    # Try to store in keyring
     service = f"synology-mcp/{app_config.instance_id}"
+    keyring_ok = _store_keyring(service, username, password)
+    if not keyring_ok:
+        return
+
+    click.echo("\nAttempting login...")
+    asyncio.run(_setup_login(app_config, username, password, service))
+
+
+def _store_keyring(service: str, username: str, password: str) -> bool:
+    """Store credentials in the OS keyring. Returns True on success."""
     try:
         import keyring
 
         keyring.set_password(service, "username", username)
         keyring.set_password(service, "password", password)
         click.echo("\nCredentials stored in OS keyring.")
+        return True
     except Exception:  # noqa: BLE001
         click.echo(
             "\nKeyring not available. Set environment variables instead:\n"
             f"  export SYNOLOGY_USERNAME={username}\n"
             f"  export SYNOLOGY_PASSWORD=<your-password>"
         )
-        return
+        return False
 
-    # Attempt login to validate and handle 2FA
-    click.echo("\nAttempting login...")
-    asyncio.run(_setup_login(app_config, username, password, service))
+
+async def _connect_and_login(
+    config: Any, username: str, password: str, service: str, verbose: bool
+) -> dict[str, Any]:
+    """Connect to NAS, validate login, fetch hostname. Returns result dict."""
+    from synology_mcp.core.client import DsmClient
+    from synology_mcp.core.config import AppConfig
+
+    assert isinstance(config, AppConfig)
+    assert config.connection is not None
+
+    protocol = "https" if config.connection.https else "http"
+    base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
+
+    result: dict[str, Any] = {"success": False}
+
+    async with DsmClient(
+        base_url=base_url,
+        verify_ssl=config.connection.verify_ssl,
+        timeout=config.connection.timeout,
+    ) as client:
+        await client.query_api_info()
+
+        # Attempt login
+        try:
+            data = await client.request(
+                "SYNO.API.Auth",
+                "login",
+                version=6,
+                params={
+                    "account": username,
+                    "passwd": password,
+                    "format": "sid",
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            error_code = getattr(e, "code", None)
+            if error_code == 403:
+                # 2FA flow
+                click.echo("2FA is required. Enter the OTP code from your authenticator app.")
+                otp_code = click.prompt("OTP code")
+                try:
+                    data = await client.request(
+                        "SYNO.API.Auth",
+                        "login",
+                        version=6,
+                        params={
+                            "account": username,
+                            "passwd": password,
+                            "otp_code": otp_code,
+                            "enable_device_token": "yes",
+                            "device_name": "SynologyMCP",
+                            "format": "sid",
+                        },
+                    )
+                    device_id = data.get("did", "")
+                    if device_id:
+                        import keyring
+
+                        keyring.set_password(service, "device_id", device_id)
+                        click.echo(click.style("2FA bootstrap complete!", fg="green"))
+                        click.echo("Device token stored in keyring.")
+                    else:
+                        click.echo(click.style("Login successful!", fg="green"))
+                except Exception as e2:  # noqa: BLE001
+                    click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
+                    return result
+            else:
+                click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+                return result
+
+        sid = data.get("sid")
+        if sid:
+            client.sid = sid
+            click.echo(click.style("Login successful!", fg="green"))
+
+            # Fetch NAS hostname
+            dsm_info = await client.fetch_dsm_info()
+            nas_hostname = dsm_info.get("hostname") or ""
+            if nas_hostname:
+                result["hostname"] = nas_hostname
+
+            # Store DSM version in state
+            dsm_version = dsm_info.get("version_string", "")
+            if dsm_version:
+                result["dsm_version"] = dsm_version
+
+            # Logout
+            await client.request("SYNO.API.Auth", "logout", version=6, params={})
+
+        result["success"] = True
+
+    return result
 
 
 async def _setup_login(config: object, username: str, password: str, service: str) -> None:
@@ -191,9 +463,36 @@ async def _setup_login(config: object, username: str, password: str, service: st
                 click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
 
 
+def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:
+    """Print a Claude Desktop JSON snippet for the user to copy."""
+    import json
+    import shutil
+
+    uv_path = shutil.which("uv") or "<path-to-uv>"
+
+    snippet = {
+        "mcpServers": {
+            f"synology-{config.display_name}": {
+                "command": uv_path,
+                "args": [
+                    "--directory",
+                    str(Path.cwd()),
+                    "run",
+                    "synology-mcp",
+                    "serve",
+                    "--config",
+                    str(config_path),
+                ],
+            }
+        }
+    }
+    click.echo("\nAdd this to your Claude Desktop config (claude_desktop_config.json):\n")
+    click.echo(json.dumps(snippet, indent=2))
+
+
 @main.command()
-@click.option("--config", type=click.Path(), help="Path to config file")
-@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
+@click.option("-c", "--config", type=click.Path(), help="Path to config file")
+@click.option("--verbose", is_flag=True, help="Enable debug logging")
 def check(config: str | None, verbose: bool) -> None:
     """Validate stored credentials can authenticate."""
     _init_early_logging(verbose=verbose)
@@ -203,13 +502,13 @@ def check(config: str | None, verbose: bool) -> None:
     try:
         app_config = load_config(config)
     except (FileNotFoundError, ValueError) as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(click.style(f"Error: {e}", fg="red"), err=True)
         sys.exit(1)
 
     if not verbose:
         _configure_logging(app_config.logging.level, app_config.logging.file)
 
-    click.echo(f"Checking credentials for instance '{app_config.instance_id}'...")
+    click.echo(f"Checking credentials for '{app_config.display_name}'...")
     asyncio.run(_check_login(app_config))
 
 

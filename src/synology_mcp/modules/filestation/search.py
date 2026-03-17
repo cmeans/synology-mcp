@@ -34,7 +34,8 @@ async def search_files(
     limit: int = 500,
     additional: list[str] | None = None,
     file_type_indicator: str = "emoji",
-    timeout: float = 60.0,
+    timeout: float = 120.0,
+    poll_interval: float = 1.0,
 ) -> str:
     """Search for files by name, type, size, or modification date."""
     if additional is None:
@@ -48,7 +49,14 @@ async def search_files(
         "recursive": str(recursive).lower(),
     }
     if pattern:
-        start_params["pattern"] = pattern
+        if pattern.startswith("*.") and "." not in pattern[2:]:
+            # Pure extension pattern like "*.mkv" — use DSM's extension filter
+            # instead of pattern, which doesn't support glob wildcards
+            if not extension:
+                extension = pattern[2:]
+        else:
+            # Name pattern — DSM treats this as a substring/keyword match
+            start_params["pattern"] = pattern
     if extension:
         start_params["extension"] = extension
     if filetype != "all":
@@ -73,7 +81,7 @@ async def search_files(
     import asyncio
 
     elapsed = 0.0
-    interval = 0.5
+    interval = poll_interval
     all_files: list[dict[str, Any]] = []
     finished = False
 

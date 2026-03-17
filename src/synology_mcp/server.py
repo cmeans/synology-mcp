@@ -122,7 +122,11 @@ def _register_filestation(
     """Register File Station tools with the MCP server."""
     settings = FileStationSettings(**settings_dict)
     indicator = settings.file_type_indicator
-    timeout = float(settings.async_timeout)
+    search_timeout = float(settings.search_timeout or settings.async_timeout)
+    copy_move_timeout = float(settings.copy_move_timeout or settings.async_timeout)
+    delete_timeout = float(settings.delete_timeout or settings.async_timeout)
+    dir_size_timeout = float(settings.dir_size_timeout or settings.async_timeout)
+    search_poll_interval = settings.search_poll_interval
     hide_recycle = settings.hide_recycle_in_listings
 
     # These will be initialized at runtime when the server starts
@@ -157,7 +161,7 @@ def _register_filestation(
         return client_result
 
     recycle_status: dict[str, bool] = {}
-    hostname = config.connection.host if config.connection else "NAS"
+    hostname = config.display_name
 
     if "list_shares" in allowed_tools:
 
@@ -269,7 +273,8 @@ def _register_filestation(
                 recursive=recursive,
                 limit=limit,
                 file_type_indicator=indicator,
-                timeout=timeout,
+                timeout=search_timeout,
+                poll_interval=search_poll_interval,
             )
 
     if "get_file_info" in allowed_tools:
@@ -294,7 +299,7 @@ def _register_filestation(
         )
         async def tool_get_dir_size(path: str) -> str:
             client = await _get_client()
-            return await get_dir_size(client, path=path, timeout=timeout)
+            return await get_dir_size(client, path=path, timeout=dir_size_timeout)
 
     # WRITE tools
     if "create_folder" in allowed_tools:
@@ -340,7 +345,7 @@ def _register_filestation(
                 dest_folder=dest_folder,
                 overwrite=overwrite,
                 file_type_indicator=indicator,
-                timeout=timeout,
+                timeout=copy_move_timeout,
             )
 
     if "move_files" in allowed_tools:
@@ -361,7 +366,7 @@ def _register_filestation(
                 dest_folder=dest_folder,
                 overwrite=overwrite,
                 file_type_indicator=indicator,
-                timeout=timeout,
+                timeout=copy_move_timeout,
             )
 
     if "delete_files" in allowed_tools:
@@ -383,7 +388,7 @@ def _register_filestation(
                 recursive=recursive,
                 file_type_indicator=indicator,
                 recycle_bin_status=recycle_status,
-                timeout=timeout,
+                timeout=delete_timeout,
             )
 
     if "restore_from_recycle_bin" in allowed_tools:
@@ -408,5 +413,5 @@ def _register_filestation(
                 dest_folder=dest_folder,
                 overwrite=overwrite,
                 file_type_indicator=indicator,
-                timeout=timeout,
+                timeout=delete_timeout,
             )

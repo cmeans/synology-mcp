@@ -49,7 +49,8 @@ class AuthManager:
     def _resolve_credentials(self) -> tuple[str, str, str | None]:
         """Resolve credentials from the storage hierarchy.
 
-        Order: keyring -> env vars -> config file.
+        Order: env vars -> config file -> keyring.
+        Explicit sources (env, config) override the implicit default (keyring).
         Returns: (username, password, device_id or None)
         """
         import os
@@ -58,39 +59,18 @@ class AuthManager:
         password: str | None = None
         device_id: str | None = None
 
-        # Try keyring first
-        try:
-            service = f"synology-mcp/{self._config.instance_id or 'default'}"
-            logger.debug("Trying keyring service: %s", service)
-            username = kr.get_password(service, "username")
-            password = kr.get_password(service, "password")
-            device_id = kr.get_password(service, "device_id")
-            if username:
-                logger.debug(
-                    "Credentials found in keyring (user: %s, device_id: %s)",
-                    username,
-                    "yes" if device_id else "no",
-                )
-            else:
-                logger.debug("No credentials in keyring")
-        except Exception:  # noqa: BLE001
-            logger.debug("Keyring not available, falling back to env/config.")
+        # 1. Environment variables (highest priority — explicit override)
+        username = os.environ.get("SYNOLOGY_USERNAME")
+        if username:
+            logger.debug("Username from env var SYNOLOGY_USERNAME: %s", username)
+        password = os.environ.get("SYNOLOGY_PASSWORD")
+        if password:
+            logger.debug("Password from env var SYNOLOGY_PASSWORD")
+        device_id = os.environ.get("SYNOLOGY_DEVICE_ID")
+        if device_id:
+            logger.debug("Device ID from env var SYNOLOGY_DEVICE_ID")
 
-        # Env var fallback
-        if not username:
-            username = os.environ.get("SYNOLOGY_USERNAME")
-            if username:
-                logger.debug("Username from env var SYNOLOGY_USERNAME: %s", username)
-        if not password:
-            password = os.environ.get("SYNOLOGY_PASSWORD")
-            if password:
-                logger.debug("Password from env var SYNOLOGY_PASSWORD")
-        if not device_id:
-            device_id = os.environ.get("SYNOLOGY_DEVICE_ID")
-            if device_id:
-                logger.debug("Device ID from env var SYNOLOGY_DEVICE_ID")
-
-        # Config file fallback (last resort)
+        # 2. Config file (explicit, if present)
         if not username and self._config.auth.username:
             username = self._config.auth.username
             logger.debug("Username from config file: %s", username)
@@ -100,6 +80,26 @@ class AuthManager:
         if not device_id and self._config.auth.device_id:
             device_id = self._config.auth.device_id
             logger.debug("Device ID from config file")
+
+        # 3. OS keyring (implicit default — set by 'synology-mcp setup')
+        if not username or not password:
+            try:
+                service = f"synology-mcp/{self._config.instance_id or 'default'}"
+                logger.debug("Trying keyring service: %s", service)
+                kr_user = kr.get_password(service, "username")
+                kr_pass = kr.get_password(service, "password")
+                kr_device = kr.get_password(service, "device_id")
+                if kr_user and not username:
+                    username = kr_user
+                    logger.debug("Username from keyring: %s", username)
+                if kr_pass and not password:
+                    password = kr_pass
+                    logger.debug("Password from keyring")
+                if kr_device and not device_id:
+                    device_id = kr_device
+                    logger.debug("Device ID from keyring")
+            except Exception:  # noqa: BLE001
+                logger.debug("Keyring not available.")
 
         if not username or not password:
             msg = (
@@ -126,7 +126,6 @@ class AuthManager:
         params: dict[str, Any] = {
             "account": username,
             "passwd": password,
-            "session": self._session_name,
             "format": "sid",
         }
 

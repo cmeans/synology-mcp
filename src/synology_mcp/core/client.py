@@ -73,6 +73,11 @@ class DsmClient:
 
     async def __aenter__(self) -> DsmClient:
         logger.debug("Opening HTTP client connection to %s", self._base_url)
+        # Silence httpx's built-in request logger — it logs full URLs at INFO level,
+        # which leaks sensitive query params (passwd, _sid, device_id, otp_code).
+        # We do our own request logging with proper masking in request().
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
         self._http = httpx.AsyncClient(
             verify=self._verify_ssl,
             timeout=self._timeout,
@@ -126,10 +131,33 @@ class DsmClient:
             )
 
         logger.debug("API info cache populated: %d APIs available", len(self._api_cache))
-        for name, entry in sorted(self._api_cache.items()):
-            logger.debug(
-                "  %s: path=%s, v%d–v%d", name, entry.path, entry.min_version, entry.max_version
-            )
+        # Log only APIs we actually use — not all 800+
+        _relevant_apis = frozenset(
+            {
+                "SYNO.API.Auth",
+                "SYNO.DSM.Info",
+                "SYNO.FileStation.Info",
+                "SYNO.FileStation.List",
+                "SYNO.FileStation.Search",
+                "SYNO.FileStation.DirSize",
+                "SYNO.FileStation.CreateFolder",
+                "SYNO.FileStation.Rename",
+                "SYNO.FileStation.CopyMove",
+                "SYNO.FileStation.Delete",
+            }
+        )
+        for name in sorted(_relevant_apis):
+            entry = self._api_cache.get(name)
+            if entry:
+                logger.debug(
+                    "  %s: path=%s, v%d–v%d",
+                    name,
+                    entry.path,
+                    entry.min_version,
+                    entry.max_version,
+                )
+            else:
+                logger.debug("  %s: NOT AVAILABLE", name)
 
         return self._api_cache
 
@@ -260,6 +288,22 @@ class DsmClient:
             return await self.request(api, method, version, params, _is_retry=True)
 
         raise error_from_code(code, api)
+
+    async def fetch_dsm_info(self) -> dict[str, Any]:
+        """Query SYNO.DSM.Info getinfo and return the data dict.
+
+        Returns an empty dict if the API is unavailable.
+        """
+        if "SYNO.DSM.Info" not in self._api_cache:
+            logger.debug("SYNO.DSM.Info not in API cache, skipping hostname fetch")
+            return {}
+        try:
+            data = await self.request("SYNO.DSM.Info", "getinfo")
+            logger.debug("DSM info: %s", {k: v for k, v in data.items() if k != "serial"})
+            return data
+        except SynologyError as e:
+            logger.debug("Failed to fetch DSM info: %s", e)
+            return {}
 
     @staticmethod
     def escape_path_param(paths: list[str]) -> str:

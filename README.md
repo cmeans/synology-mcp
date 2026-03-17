@@ -7,7 +7,7 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 - **File Station** — browse, search, move, copy, delete, and organize files on your NAS
 - **Permission tiers** — READ (safe browsing) or WRITE (file operations), configured per module
 - **2FA support** — device token flow for accounts with two-factor authentication
-- **Secure credentials** — OS keyring integration (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+- **Secure credentials** — OS keyring integration (macOS Keychain, Windows Credential Manager, Linux Secret Service). See [docs/credentials.md](docs/credentials.md) for storage details and multi-NAS setup.
 
 ## Quick Start
 

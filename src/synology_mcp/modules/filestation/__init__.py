@@ -20,6 +20,11 @@ class FileStationSettings(BaseModel):
     hide_recycle_in_listings: bool = True
     file_type_indicator: Literal["emoji", "text"] = "emoji"
     async_timeout: int = Field(default=120, ge=10, le=3600)
+    search_timeout: int | None = Field(default=None, ge=10, le=3600)
+    copy_move_timeout: int | None = Field(default=None, ge=10, le=3600)
+    delete_timeout: int | None = Field(default=None, ge=10, le=3600)
+    dir_size_timeout: int | None = Field(default=None, ge=10, le=3600)
+    search_poll_interval: float = Field(default=1.0, ge=0.5, le=10.0)
 
 
 MODULE_INFO = ModuleInfo(

@@ -70,6 +70,42 @@ COMMON_ERROR_CODES: dict[int, tuple[str, str]] = {
     119: ("Invalid session", "Session ID is invalid. Re-authentication will be attempted."),
 }
 
+# Auth API error codes (400-series for SYNO.API.Auth).
+AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
+    400: ("No such account or incorrect password", "Check username and password."),
+    401: ("Disabled account", "This account is disabled in DSM. Contact your NAS administrator."),
+    402: (
+        "Permission denied",
+        "This account does not have permission to use this service. "
+        "Check DSM > Control Panel > User > Applications.",
+    ),
+    403: ("2FA required", "Run 'synology-mcp setup' to complete 2FA bootstrap."),
+    404: (
+        "2FA code failed",
+        "The OTP code was incorrect or expired. Try again with a fresh code.",
+    ),
+    406: (
+        "OTP enforcement required",
+        "Admin requires 2FA. Enable 2FA in DSM > Personal > Security.",
+    ),
+    407: (
+        "Max login attempts exceeded",
+        "Account is temporarily locked. Wait a few minutes and try again.",
+    ),
+    408: (
+        "IP blocked",
+        "Too many failed attempts. Check DSM > Control Panel > Security > Auto Block.",
+    ),
+    409: (
+        "SID required",
+        "Session ID is required for this operation.",
+    ),
+    410: (
+        "Token expired",
+        "The login token has expired. Re-authenticate.",
+    ),
+}
+
 # File Station error codes (400-series).
 FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     400: ("Invalid parameter", "Check path format and parameter values."),
@@ -95,10 +131,18 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
 def error_from_code(code: int, api_name: str = "") -> SynologyError:
     """Create a typed exception from a DSM error code.
 
-    Checks File Station codes first if api_name contains 'FileStation',
-    then falls back to common codes.
+    Error codes are context-specific: the same code means different things
+    for Auth vs FileStation APIs. This function checks API-specific codes
+    first, then falls back to common codes.
     """
-    # Check File Station codes for FileStation APIs
+    # Auth API codes (400-series for SYNO.API.Auth)
+    if "Auth" in api_name and code in AUTH_ERROR_CODES:
+        message, suggestion = AUTH_ERROR_CODES[code]
+        if code in (400, 401, 403, 404, 406):
+            return AuthenticationError(message, code=code, suggestion=suggestion)
+        return SynologyError(message, code=code, suggestion=suggestion)
+
+    # File Station codes (400-series for SYNO.FileStation.*)
     if "FileStation" in api_name and code in FILESTATION_ERROR_CODES:
         message, suggestion = FILESTATION_ERROR_CODES[code]
         if code == 408:
@@ -111,7 +155,7 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
             return IllegalNameError(message, code=code, suggestion=suggestion)
         return FileStationError(message, code=code, suggestion=suggestion)
 
-    # Common codes
+    # Common codes (100-series, shared across all APIs)
     if code in COMMON_ERROR_CODES:
         message, suggestion = COMMON_ERROR_CODES[code]
         if code == 105:
@@ -120,13 +164,6 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
             return SessionExpiredError(message, code=code, suggestion=suggestion)
         if code == 102:
             return ApiNotFoundError(message, code=code, suggestion=suggestion)
-        if code in (403,):
-            return AuthenticationError(message, code=code, suggestion=suggestion)
-        return SynologyError(message, code=code, suggestion=suggestion)
-
-    # Also check FileStation codes for non-FileStation APIs (fallback)
-    if code in FILESTATION_ERROR_CODES:
-        message, suggestion = FILESTATION_ERROR_CODES[code]
         return SynologyError(message, code=code, suggestion=suggestion)
 
     return SynologyError(f"Unknown error (code {code})", code=code)

@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import warnings
 from pathlib import Path
 from typing import Any, Literal
 
@@ -77,10 +76,22 @@ class AppConfig(BaseModel, extra="forbid"):
 
     schema_version: int
     instance_id: str | None = None
+    alias: str | None = None
     connection: ConnectionConfig | None = None
     auth: AuthConfig = Field(default_factory=AuthConfig)
     modules: dict[str, ModuleConfig]
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+
+    @property
+    def display_name(self) -> str:
+        """Human-friendly name: alias > instance_id > host."""
+        if self.alias:
+            return self.alias
+        if self.instance_id:
+            return self.instance_id
+        if self.connection:
+            return self.connection.host
+        return "synology"
 
     @model_validator(mode="after")
     def _validate_config(self) -> AppConfig:
@@ -208,12 +219,19 @@ def _merge_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 def _emit_warnings(config: AppConfig) -> None:
     """Emit warnings for insecure or unusual config."""
     if config.auth.username or config.auth.password:
-        warnings.warn(
-            "Plaintext credentials found in config file. "
-            "Use 'synology-mcp setup' to store credentials securely in the OS keyring.",
-            UserWarning,
-            stacklevel=2,
+        creds_from_env = bool(
+            os.environ.get("SYNOLOGY_USERNAME") or os.environ.get("SYNOLOGY_PASSWORD")
         )
+        if creds_from_env:
+            logger.warning(
+                "Credentials provided via environment variables. "
+                "Consider using 'synology-mcp setup' to store them securely in the OS keyring."
+            )
+        else:
+            logger.warning(
+                "Plaintext credentials found in config file. "
+                "Use 'synology-mcp setup' to store credentials securely in the OS keyring."
+            )
 
     conn = config.connection
     if conn is not None:
@@ -223,11 +241,9 @@ def _emit_warnings(config: AppConfig) -> None:
                 "Acceptable on a trusted LAN."
             )
         if conn.https and not conn.verify_ssl:
-            warnings.warn(
+            logger.warning(
                 "SSL certificate verification is disabled. "
-                "Only use this on trusted networks with self-signed certificates.",
-                UserWarning,
-                stacklevel=2,
+                "Only use this on trusted networks with self-signed certificates."
             )
 
     for name, mod in config.modules.items():
@@ -235,13 +251,48 @@ def _emit_warnings(config: AppConfig) -> None:
             logger.info("Module '%s' is listed but disabled.", name)
 
 
+def _synthesize_env_config() -> AppConfig | None:
+    """Synthesize a config from environment variables when no config file exists.
+
+    Returns an AppConfig if SYNOLOGY_HOST is set, otherwise None.
+    """
+    host = os.environ.get("SYNOLOGY_HOST")
+    if not host:
+        return None
+
+    logger.debug("No config file found; synthesizing from SYNOLOGY_HOST=%s", host)
+    raw: dict[str, Any] = {
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "connection": {"host": host},
+        "modules": {"filestation": {"enabled": True, "permission": "read"}},
+    }
+    raw = _merge_env_overrides(raw)
+    config = AppConfig(**raw)
+    _emit_warnings(config)
+    return config
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     """Load, merge, validate, and return the application config.
 
     Args:
         path: Explicit config file path, or None for auto-discovery.
+
+    Falls back to env-var-only mode if no config file is found but
+    SYNOLOGY_HOST is set.
     """
-    config_path = discover_config_path(str(path) if path else None)
+    try:
+        config_path = discover_config_path(str(path) if path else None)
+    except FileNotFoundError:
+        # If an explicit path was given, always fail
+        if path:
+            raise
+        # Try env-var-only mode
+        env_config = _synthesize_env_config()
+        if env_config:
+            return env_config
+        raise
+
     logger.debug("Loading config from %s", config_path)
     raw_text = config_path.read_text(encoding="utf-8")
     raw: dict[str, Any] = yaml.safe_load(raw_text) or {}

@@ -2,6 +2,7 @@
 
 from synology_mcp.core.errors import (
     ApiNotFoundError,
+    AuthenticationError,
     DiskFullError,
     FileExistsError,
     FileStationError,
@@ -61,6 +62,27 @@ class TestErrorFromCode:
         for code in (418, 419):
             err = error_from_code(code, api_name="SYNO.FileStation.Rename")
             assert isinstance(err, IllegalNameError)
+
+    def test_auth_402_is_not_filestation(self) -> None:
+        """Auth API code 402 must NOT map to FileStation 'System too busy'."""
+        err = error_from_code(402, api_name="SYNO.API.Auth")
+        assert "Permission denied" in str(err) or "permission" in str(err).lower()
+        assert "too busy" not in str(err).lower()
+        assert err.code == 402
+
+    def test_auth_400_bad_credentials(self) -> None:
+        err = error_from_code(400, api_name="SYNO.API.Auth")
+        assert isinstance(err, AuthenticationError)
+
+    def test_auth_403_2fa_required(self) -> None:
+        err = error_from_code(403, api_name="SYNO.API.Auth")
+        assert isinstance(err, AuthenticationError)
+        assert err.code == 403
+
+    def test_auth_codes_not_applied_to_filestation(self) -> None:
+        """FileStation code 408 should still be PathNotFoundError, not Auth."""
+        err = error_from_code(408, api_name="SYNO.FileStation.List")
+        assert isinstance(err, PathNotFoundError)
 
     def test_unknown_code(self) -> None:
         err = error_from_code(9999)

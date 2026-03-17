@@ -123,7 +123,9 @@ async def list_files(
 
     # Filter out #recycle if configured
     if hide_recycle:
+        pre_filter = len(files)
         files = [f for f in files if f.get("name") != "#recycle"]
+        total -= pre_filter - len(files)
 
     if not files:
         return format_table(
