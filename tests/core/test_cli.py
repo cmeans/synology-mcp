@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from click.testing import CliRunner
 
+from synology_mcp import __version__
 from synology_mcp.cli import main
 
 
@@ -19,13 +20,13 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.2.1" in result.output
+        assert __version__ in result.output
 
     def test_version_short_flag(self) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["-v"])
         assert result.exit_code == 0
-        assert "0.2.1" in result.output
+        assert __version__ in result.output
 
     def test_help(self) -> None:
         runner = CliRunner()
