@@ -122,15 +122,15 @@ class AppConfig(BaseModel, extra="forbid"):
         if self.instance_id is None:
             self.instance_id = _derive_instance_id(self.connection.host)
 
-        # Validate instance_id format
-        if self.instance_id and not re.match(r"^[a-z0-9-]+$", self.instance_id.lower()):
-            msg = (
-                f"instance_id '{self.instance_id}' contains invalid characters. "
-                "Only alphanumeric characters and hyphens are allowed."
-            )
-            raise ValueError(msg)
+        # Normalize and validate instance_id format
         if self.instance_id:
             self.instance_id = self.instance_id.lower()
+            if not re.match(r"^[a-z0-9-]+$", self.instance_id):
+                msg = (
+                    f"instance_id '{self.instance_id}' contains invalid characters. "
+                    "Only lowercase alphanumeric characters and hyphens are allowed."
+                )
+                raise ValueError(msg)
 
         return self
 

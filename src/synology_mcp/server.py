@@ -148,28 +148,35 @@ def _register_filestation(
             _state["client"] = client
             _state["auth"] = auth
 
-            # Check for updates on first connection (non-blocking)
+            # Check for updates in background — never blocks tool execution
             if config.check_for_updates:
-                try:
-                    from synology_mcp.cli import (
-                        _check_for_update,
-                        _load_global_state,
-                        _save_global_state,
-                    )
+                import asyncio
 
-                    gstate = _load_global_state()
-                    latest = _check_for_update(gstate)
-                    _save_global_state(gstate)
-                    if latest:
-                        from synology_mcp import __version__
-
-                        _state["update_notice"] = (
-                            f"\n\n---\nUpdate available: synology-mcp {latest} "
-                            f"(current: {__version__}). "
-                            f"Run: synology-mcp --check-update"
+                async def _bg_update_check() -> None:
+                    try:
+                        from synology_mcp.cli import (
+                            _check_for_update,
+                            _load_global_state,
+                            _save_global_state,
                         )
-                except Exception:  # noqa: BLE001
-                    pass  # Never let update check break tool functionality
+
+                        loop = asyncio.get_running_loop()
+                        gstate = _load_global_state()
+                        # Run the blocking PyPI check in a thread
+                        latest = await loop.run_in_executor(None, _check_for_update, gstate)
+                        _save_global_state(gstate)
+                        if latest:
+                            from synology_mcp import __version__
+
+                            _state["update_notice"] = (
+                                f"\n\n---\nUpdate available: synology-mcp {latest} "
+                                f"(current: {__version__}). "
+                                f"Run: synology-mcp --check-update"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass  # Never let update check break tool functionality
+
+                asyncio.create_task(_bg_update_check())
         client_result: DsmClient = _state["client"]
         return client_result
 

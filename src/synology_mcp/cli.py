@@ -540,6 +540,76 @@ def _store_keyring(service: str, username: str, password: str) -> bool:
         return False
 
 
+async def _attempt_login(
+    client: Any,
+    username: str,
+    password: str,
+    service: str,
+) -> dict[str, Any]:
+    """Attempt DSM login, handling 2FA if required.
+
+    Returns dict with 'success' bool, and optionally 'sid'.
+    On 2FA success, stores device token in keyring.
+    """
+    from synology_mcp.core.errors import SynologyError
+
+    result: dict[str, Any] = {"success": False}
+
+    try:
+        data = await client.request(
+            "SYNO.API.Auth",
+            "login",
+            version=6,
+            params={"account": username, "passwd": password, "format": "sid"},
+        )
+    except SynologyError as e:
+        if e.code == 403:
+            # 2FA required
+            click.echo("2FA is required. Enter the OTP code from your authenticator app.")
+            otp_code = click.prompt("OTP code")
+            try:
+                data = await client.request(
+                    "SYNO.API.Auth",
+                    "login",
+                    version=6,
+                    params={
+                        "account": username,
+                        "passwd": password,
+                        "otp_code": otp_code,
+                        "enable_device_token": "yes",
+                        "device_name": "SynologyMCP",
+                        "format": "sid",
+                    },
+                )
+                device_id = data.get("did", "")
+                if device_id:
+                    import keyring
+
+                    keyring.set_password(service, "device_id", device_id)
+                    click.echo(click.style("2FA bootstrap complete!", fg="green"))
+                    click.echo("Device token stored in keyring.")
+                else:
+                    click.echo(click.style("Login successful!", fg="green"))
+            except Exception as e2:  # noqa: BLE001
+                click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
+                return result
+        else:
+            click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+            return result
+    except Exception as e:  # noqa: BLE001
+        click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+        return result
+
+    sid = data.get("sid")
+    if sid:
+        client.sid = sid
+        if not result.get("success"):
+            click.echo(click.style("Login successful!", fg="green"))
+    result["success"] = True
+    result["sid"] = sid
+    return result
+
+
 async def _connect_and_login(
     config: Any, username: str, password: str, service: str, verbose: bool
 ) -> dict[str, Any]:
@@ -562,72 +632,21 @@ async def _connect_and_login(
     ) as client:
         await client.query_api_info()
 
-        # Attempt login
-        try:
-            data = await client.request(
-                "SYNO.API.Auth",
-                "login",
-                version=6,
-                params={
-                    "account": username,
-                    "passwd": password,
-                    "format": "sid",
-                },
-            )
-        except Exception as e:  # noqa: BLE001
-            error_code = getattr(e, "code", None)
-            if error_code == 403:
-                # 2FA flow
-                click.echo("2FA is required. Enter the OTP code from your authenticator app.")
-                otp_code = click.prompt("OTP code")
-                try:
-                    data = await client.request(
-                        "SYNO.API.Auth",
-                        "login",
-                        version=6,
-                        params={
-                            "account": username,
-                            "passwd": password,
-                            "otp_code": otp_code,
-                            "enable_device_token": "yes",
-                            "device_name": "SynologyMCP",
-                            "format": "sid",
-                        },
-                    )
-                    device_id = data.get("did", "")
-                    if device_id:
-                        import keyring
+        login_result = await _attempt_login(client, username, password, service)
+        if not login_result["success"]:
+            return result
 
-                        keyring.set_password(service, "device_id", device_id)
-                        click.echo(click.style("2FA bootstrap complete!", fg="green"))
-                        click.echo("Device token stored in keyring.")
-                    else:
-                        click.echo(click.style("Login successful!", fg="green"))
-                except Exception as e2:  # noqa: BLE001
-                    click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
-                    return result
-            else:
-                click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
-                return result
+        # Fetch NAS hostname
+        dsm_info = await client.fetch_dsm_info()
+        nas_hostname = dsm_info.get("hostname") or ""
+        if nas_hostname:
+            result["hostname"] = nas_hostname
+        dsm_version = dsm_info.get("version_string", "")
+        if dsm_version:
+            result["dsm_version"] = dsm_version
 
-        sid = data.get("sid")
-        if sid:
-            client.sid = sid
-            click.echo(click.style("Login successful!", fg="green"))
-
-            # Fetch NAS hostname
-            dsm_info = await client.fetch_dsm_info()
-            nas_hostname = dsm_info.get("hostname") or ""
-            if nas_hostname:
-                result["hostname"] = nas_hostname
-
-            # Store DSM version in state
-            dsm_version = dsm_info.get("version_string", "")
-            if dsm_version:
-                result["dsm_version"] = dsm_version
-
-            # Logout
-            await client.request("SYNO.API.Auth", "logout", version=6, params={})
+        # Logout
+        await client.request("SYNO.API.Auth", "logout", version=6, params={})
 
         result["success"] = True
 
@@ -636,12 +655,11 @@ async def _connect_and_login(
 
 async def _setup_login(config: object, username: str, password: str, service: str) -> None:
     """Attempt login during setup, handle 2FA if needed."""
+    from synology_mcp.core.client import DsmClient
     from synology_mcp.core.config import AppConfig
 
     assert isinstance(config, AppConfig)
     assert config.connection is not None
-
-    from synology_mcp.core.client import DsmClient
 
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
@@ -653,62 +671,13 @@ async def _setup_login(config: object, username: str, password: str, service: st
     ) as client:
         await client.query_api_info()
 
-        # Attempt login
-        try:
-            data = await client.request(
-                "SYNO.API.Auth",
-                "login",
-                version=6,
-                params={
-                    "account": username,
-                    "passwd": password,
-                    "format": "sid",
-                },
-            )
-            sid = data.get("sid")
-            if sid:
-                click.echo(click.style("Login successful!", fg="green"))
-                # Logout
-                client.sid = sid
-                await client.request("SYNO.API.Auth", "logout", version=6, params={})
-        except Exception as e:  # noqa: BLE001
-            error_code = getattr(e, "code", None)
-            if error_code == 403:
-                click.echo("2FA is required. Enter the OTP code from your authenticator app.")
-                otp_code = click.prompt("OTP code")
+        login_result = await _attempt_login(client, username, password, service)
+        if not login_result["success"]:
+            return
 
-                try:
-                    data = await client.request(
-                        "SYNO.API.Auth",
-                        "login",
-                        version=6,
-                        params={
-                            "account": username,
-                            "passwd": password,
-                            "otp_code": otp_code,
-                            "enable_device_token": "yes",
-                            "device_name": "SynologyMCP",
-                            "format": "sid",
-                        },
-                    )
-                    device_id = data.get("did", "")
-                    if device_id:
-                        import keyring
-
-                        keyring.set_password(service, "device_id", device_id)
-                        click.echo(click.style("2FA bootstrap complete!", fg="green"))
-                        click.echo("Device token stored in keyring.")
-                    else:
-                        click.echo(click.style("Login successful!", fg="green"))
-
-                    sid = data.get("sid")
-                    if sid:
-                        client.sid = sid
-                        await client.request("SYNO.API.Auth", "logout", version=6, params={})
-                except Exception as e2:  # noqa: BLE001
-                    click.echo(click.style(f"Login failed: {e2}", fg="red"), err=True)
-            else:
-                click.echo(click.style(f"Login failed: {e}", fg="red"), err=True)
+        # Logout
+        if client.sid:
+            await client.request("SYNO.API.Auth", "logout", version=6, params={})
 
 
 def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:
