@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from synology_mcp.core.auth import AuthManager
 from synology_mcp.core.client import DsmClient
@@ -65,6 +66,16 @@ Deleted files on those shares can be recovered:
 - restore_from_recycle_bin to recover them
 The recycle bin lives at /<share>/#recycle/ internally.
 """
+
+# Tool annotations tell Claude Desktop about operation safety
+_ANNO_READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+_ANNO_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+_ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+_ANNO_IDEMPOTENT = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+)
 
 # Known module registry
 _MODULE_REGISTRY: dict[str, Any] = {
@@ -170,6 +181,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "list_shares"
             ),
+            annotations=_ANNO_READ_ONLY,
         )
         async def tool_list_shares(
             sort_by: str = "name",
@@ -190,6 +202,7 @@ def _register_filestation(
         @server.tool(
             name="list_files",
             description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "list_files"),
+            annotations=_ANNO_READ_ONLY,
         )
         async def tool_list_files(
             path: str,
@@ -221,6 +234,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "list_recycle_bin"
             ),
+            annotations=_ANNO_READ_ONLY,
         )
         async def tool_list_recycle_bin(
             share: str,
@@ -248,6 +262,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "search_files"
             ),
+            annotations=_ANNO_READ_ONLY,
         )
         async def tool_search_files(
             folder_path: str,
@@ -284,6 +299,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "get_file_info"
             ),
+            annotations=_ANNO_READ_ONLY,
         )
         async def tool_get_file_info(paths: list[str]) -> str:
             client = await _get_client()
@@ -296,6 +312,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "get_dir_size"
             ),
+            annotations=_ANNO_READ_ONLY,
         )
         async def tool_get_dir_size(path: str) -> str:
             client = await _get_client()
@@ -309,6 +326,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "create_folder"
             ),
+            annotations=_ANNO_IDEMPOTENT,
         )
         async def tool_create_folder(
             paths: list[str],
@@ -322,6 +340,7 @@ def _register_filestation(
         @server.tool(
             name="rename",
             description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "rename"),
+            annotations=_ANNO_WRITE,
         )
         async def tool_rename(path: str, new_name: str) -> str:
             client = await _get_client()
@@ -332,6 +351,7 @@ def _register_filestation(
         @server.tool(
             name="copy_files",
             description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "copy_files"),
+            annotations=_ANNO_WRITE,
         )
         async def tool_copy_files(
             paths: list[str],
@@ -353,6 +373,7 @@ def _register_filestation(
         @server.tool(
             name="move_files",
             description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "move_files"),
+            annotations=_ANNO_DESTRUCTIVE,
         )
         async def tool_move_files(
             paths: list[str],
@@ -376,6 +397,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "delete_files"
             ),
+            annotations=_ANNO_DESTRUCTIVE,
         )
         async def tool_delete_files(
             paths: list[str],
@@ -398,6 +420,7 @@ def _register_filestation(
             description=next(
                 t.description for t in FS_MODULE_INFO.tools if t.name == "restore_from_recycle_bin"
             ),
+            annotations=_ANNO_WRITE,
         )
         async def tool_restore_from_recycle_bin(
             share: str,
