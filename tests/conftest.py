@@ -24,7 +24,7 @@ def make_test_config(**overrides: Any) -> AppConfig:
                 "enabled": True,
                 "permission": "write",
                 "settings": {
-                    "hide_recycle_in_listings": True,
+                    "hide_recycle_in_listings": False,
                     "file_type_indicator": "emoji",
                     "async_timeout": 120,
                 },

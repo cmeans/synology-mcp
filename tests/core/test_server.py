@@ -84,7 +84,7 @@ class TestFileStationSettings:
         from synology_mcp.modules.filestation import FileStationSettings
 
         s = FileStationSettings()
-        assert s.hide_recycle_in_listings is True
+        assert s.hide_recycle_in_listings is False
         assert s.file_type_indicator == "emoji"
         assert s.async_timeout == 120
         assert s.search_timeout is None

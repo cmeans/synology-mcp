@@ -17,7 +17,7 @@ from synology_mcp.modules import (
 class FileStationSettings(BaseModel):
     """File Station module settings."""
 
-    hide_recycle_in_listings: bool = True
+    hide_recycle_in_listings: bool = False
     file_type_indicator: Literal["emoji", "text"] = "emoji"
     async_timeout: int = Field(default=120, ge=10, le=3600)
     search_timeout: int | None = Field(default=None, ge=10, le=3600)
