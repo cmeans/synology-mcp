@@ -146,6 +146,7 @@ def _register_filestation(
         "client": None,
         "auth": None,
         "server_state": ServerState(),
+        "update_notice": None,  # Set once on first tool call, then cleared
     }
 
     async def _get_client() -> DsmClient:
@@ -168,8 +169,37 @@ def _register_filestation(
 
             _state["client"] = client
             _state["auth"] = auth
+
+            # Check for updates on first connection (non-blocking)
+            try:
+                from synology_mcp.cli import (
+                    _check_for_update,
+                    _load_global_state,
+                    _save_global_state,
+                )
+
+                gstate = _load_global_state()
+                latest = _check_for_update(gstate)
+                _save_global_state(gstate)
+                if latest:
+                    from synology_mcp import __version__
+
+                    _state["update_notice"] = (
+                        f"\n\n---\nUpdate available: synology-mcp {latest} "
+                        f"(current: {__version__}). "
+                        f"Run: synology-mcp --check-update"
+                    )
+            except Exception:  # noqa: BLE001
+                pass  # Never let update check break tool functionality
         client_result: DsmClient = _state["client"]
         return client_result
+
+    def _with_update_notice(result: str) -> str:
+        """Append update notice to tool result (first call only, then clears)."""
+        notice = _state.get("update_notice") or ""
+        if notice:
+            _state["update_notice"] = None
+        return result + notice
 
     recycle_status: dict[str, bool] = {}
     hostname = config.display_name
@@ -188,13 +218,15 @@ def _register_filestation(
             sort_direction: str = "asc",
         ) -> str:
             client = await _get_client()
-            return await list_shares(
-                client,
-                sort_by=sort_by,
-                sort_direction=sort_direction,
-                recycle_bin_status=recycle_status,
-                hostname=hostname,
-                file_type_indicator=indicator,
+            return _with_update_notice(
+                await list_shares(
+                    client,
+                    sort_by=sort_by,
+                    sort_direction=sort_direction,
+                    recycle_bin_status=recycle_status,
+                    hostname=hostname,
+                    file_type_indicator=indicator,
+                )
             )
 
     if "list_files" in allowed_tools:
@@ -214,17 +246,19 @@ def _register_filestation(
             limit: int = 200,
         ) -> str:
             client = await _get_client()
-            return await list_files(
-                client,
-                path=path,
-                pattern=pattern,
-                filetype=filetype,
-                sort_by=sort_by,
-                sort_direction=sort_direction,
-                offset=offset,
-                limit=limit,
-                hide_recycle=hide_recycle,
-                file_type_indicator=indicator,
+            return _with_update_notice(
+                await list_files(
+                    client,
+                    path=path,
+                    pattern=pattern,
+                    filetype=filetype,
+                    sort_by=sort_by,
+                    sort_direction=sort_direction,
+                    offset=offset,
+                    limit=limit,
+                    hide_recycle=hide_recycle,
+                    file_type_indicator=indicator,
+                )
             )
 
     if "list_recycle_bin" in allowed_tools:
@@ -244,15 +278,17 @@ def _register_filestation(
             limit: int = 100,
         ) -> str:
             client = await _get_client()
-            return await list_recycle_bin(
-                client,
-                share=share,
-                pattern=pattern,
-                sort_by=sort_by,
-                sort_direction=sort_direction,
-                limit=limit,
-                file_type_indicator=indicator,
-                recycle_bin_status=recycle_status,
+            return _with_update_notice(
+                await list_recycle_bin(
+                    client,
+                    share=share,
+                    pattern=pattern,
+                    sort_by=sort_by,
+                    sort_direction=sort_direction,
+                    limit=limit,
+                    file_type_indicator=indicator,
+                    recycle_bin_status=recycle_status,
+                )
             )
 
     if "search_files" in allowed_tools:
@@ -276,20 +312,22 @@ def _register_filestation(
             limit: int = 500,
         ) -> str:
             client = await _get_client()
-            return await search_files(
-                client,
-                folder_path=folder_path,
-                pattern=pattern,
-                extension=extension,
-                filetype=filetype,
-                size_from=size_from,
-                size_to=size_to,
-                exclude_pattern=exclude_pattern,
-                recursive=recursive,
-                limit=limit,
-                file_type_indicator=indicator,
-                timeout=search_timeout,
-                poll_interval=search_poll_interval,
+            return _with_update_notice(
+                await search_files(
+                    client,
+                    folder_path=folder_path,
+                    pattern=pattern,
+                    extension=extension,
+                    filetype=filetype,
+                    size_from=size_from,
+                    size_to=size_to,
+                    exclude_pattern=exclude_pattern,
+                    recursive=recursive,
+                    limit=limit,
+                    file_type_indicator=indicator,
+                    timeout=search_timeout,
+                    poll_interval=search_poll_interval,
+                )
             )
 
     if "get_file_info" in allowed_tools:
@@ -303,7 +341,7 @@ def _register_filestation(
         )
         async def tool_get_file_info(paths: list[str]) -> str:
             client = await _get_client()
-            return await get_file_info(client, paths=paths)
+            return _with_update_notice(await get_file_info(client, paths=paths))
 
     if "get_dir_size" in allowed_tools:
 
@@ -316,7 +354,8 @@ def _register_filestation(
         )
         async def tool_get_dir_size(path: str) -> str:
             client = await _get_client()
-            return await get_dir_size(client, path=path, timeout=dir_size_timeout)
+            result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
+            return _with_update_notice(result)
 
     # WRITE tools
     if "create_folder" in allowed_tools:
@@ -333,7 +372,8 @@ def _register_filestation(
             force_parent: bool = True,
         ) -> str:
             client = await _get_client()
-            return await create_folder(client, paths=paths, force_parent=force_parent)
+            result = await create_folder(client, paths=paths, force_parent=force_parent)
+            return _with_update_notice(result)
 
     if "rename" in allowed_tools:
 
@@ -344,7 +384,7 @@ def _register_filestation(
         )
         async def tool_rename(path: str, new_name: str) -> str:
             client = await _get_client()
-            return await rename(client, path=path, new_name=new_name)
+            return _with_update_notice(await rename(client, path=path, new_name=new_name))
 
     if "copy_files" in allowed_tools:
 
@@ -359,13 +399,15 @@ def _register_filestation(
             overwrite: bool = False,
         ) -> str:
             client = await _get_client()
-            return await copy_files(
-                client,
-                paths=paths,
-                dest_folder=dest_folder,
-                overwrite=overwrite,
-                file_type_indicator=indicator,
-                timeout=copy_move_timeout,
+            return _with_update_notice(
+                await copy_files(
+                    client,
+                    paths=paths,
+                    dest_folder=dest_folder,
+                    overwrite=overwrite,
+                    file_type_indicator=indicator,
+                    timeout=copy_move_timeout,
+                )
             )
 
     if "move_files" in allowed_tools:
@@ -381,13 +423,15 @@ def _register_filestation(
             overwrite: bool = False,
         ) -> str:
             client = await _get_client()
-            return await move_files(
-                client,
-                paths=paths,
-                dest_folder=dest_folder,
-                overwrite=overwrite,
-                file_type_indicator=indicator,
-                timeout=copy_move_timeout,
+            return _with_update_notice(
+                await move_files(
+                    client,
+                    paths=paths,
+                    dest_folder=dest_folder,
+                    overwrite=overwrite,
+                    file_type_indicator=indicator,
+                    timeout=copy_move_timeout,
+                )
             )
 
     if "delete_files" in allowed_tools:
@@ -404,13 +448,15 @@ def _register_filestation(
             recursive: bool = True,
         ) -> str:
             client = await _get_client()
-            return await delete_files(
-                client,
-                paths=paths,
-                recursive=recursive,
-                file_type_indicator=indicator,
-                recycle_bin_status=recycle_status,
-                timeout=delete_timeout,
+            return _with_update_notice(
+                await delete_files(
+                    client,
+                    paths=paths,
+                    recursive=recursive,
+                    file_type_indicator=indicator,
+                    recycle_bin_status=recycle_status,
+                    timeout=delete_timeout,
+                )
             )
 
     if "restore_from_recycle_bin" in allowed_tools:
@@ -429,12 +475,14 @@ def _register_filestation(
             overwrite: bool = False,
         ) -> str:
             client = await _get_client()
-            return await restore_from_recycle_bin(
-                client,
-                share=share,
-                paths=paths,
-                dest_folder=dest_folder,
-                overwrite=overwrite,
-                file_type_indicator=indicator,
-                timeout=delete_timeout,
+            return _with_update_notice(
+                await restore_from_recycle_bin(
+                    client,
+                    share=share,
+                    paths=paths,
+                    dest_folder=dest_folder,
+                    overwrite=overwrite,
+                    file_type_indicator=indicator,
+                    timeout=delete_timeout,
+                )
             )
