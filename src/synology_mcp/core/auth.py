@@ -54,6 +54,8 @@ class AuthManager:
         Returns: (username, password, device_id or None)
         """
         import os
+        import sys
+        from pathlib import Path
 
         username: str | None = None
         password: str | None = None
@@ -83,6 +85,14 @@ class AuthManager:
 
         # 3. OS keyring (implicit default — set by 'synology-mcp setup')
         if not username or not password:
+            # On Linux, ensure D-Bus session address is available for keyring access.
+            # When launched by Claude Desktop, the env var may not be inherited.
+            if sys.platform == "linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+                dbus_path = f"unix:path=/run/user/{os.getuid()}/bus"
+                if Path(f"/run/user/{os.getuid()}/bus").exists():
+                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = dbus_path
+                    logger.debug("Set DBUS_SESSION_BUS_ADDRESS=%s for keyring access", dbus_path)
+
             try:
                 service = f"synology-mcp/{self._config.instance_id or 'default'}"
                 logger.debug("Trying keyring service: %s", service)

@@ -470,22 +470,29 @@ def _emit_claude_desktop_snippet(config: Any, config_path: Path) -> None:
 
     uv_path = shutil.which("uv") or "<path-to-uv>"
 
-    snippet = {
-        "mcpServers": {
-            f"synology-{config.display_name}": {
-                "command": uv_path,
-                "args": [
-                    "--directory",
-                    str(Path.cwd()),
-                    "run",
-                    "synology-mcp",
-                    "serve",
-                    "--config",
-                    str(config_path),
-                ],
-            }
-        }
+    server_entry: dict[str, Any] = {
+        "command": uv_path,
+        "args": [
+            "--directory",
+            str(Path.cwd()),
+            "run",
+            "synology-mcp",
+            "serve",
+            "--config",
+            str(config_path),
+        ],
     }
+
+    # On Linux, include DBUS_SESSION_BUS_ADDRESS so the server process
+    # can access the OS keyring (GNOME Keyring / KWallet via D-Bus).
+    # Use the env var if set, otherwise construct the standard systemd path.
+    if sys.platform == "linux":
+        dbus_addr = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+        if not dbus_addr:
+            dbus_addr = f"unix:path=/run/user/{os.getuid()}/bus"
+        server_entry["env"] = {"DBUS_SESSION_BUS_ADDRESS": dbus_addr}
+
+    snippet = {"mcpServers": {f"synology-{config.display_name}": server_entry}}
     click.echo("\nAdd this to your Claude Desktop config (claude_desktop_config.json):\n")
     click.echo(json.dumps(snippet, indent=2))
 
