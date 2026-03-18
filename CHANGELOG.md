@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 (2026-03-18)
+
+### Bug Fixes
+
+- **Sort by modified date** — map common field names (modified, date, created) to DSM API fields (mtime, crtime, etc.)
+- **Narrow exception handling** — replaced all broad `except Exception` with specific types across cli.py
+- **Typed lazy state** — server init state is now a dataclass instead of untyped dict
+- **Publish workflow runs tests** — broken code can no longer publish to PyPI
+- **Async fixture type hint** — proper `AsyncGenerator` annotation
+- **Docs accuracy** — D-Bus wording, README install section title
+
 ## 0.2.0 (2026-03-18)
 
 Quality and correctness fixes from critical code review and live testing.
