@@ -173,10 +173,7 @@ async def list_files(
 
     next_offset = offset + shown
     if next_offset < total:
-        result += (
-            f"\n\nShowing {shown} of {total:,} items. "
-            f"Use offset={next_offset} to see more."
-        )
+        result += f"\n\nShowing {shown} of {total:,} items. Use offset={next_offset} to see more."
     elif shown > 0:
         result += f"\n\n{shown} of {total} items."
 
