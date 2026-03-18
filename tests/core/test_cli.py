@@ -1,4 +1,4 @@
-"""Tests for cli.py — CLI subcommands via click CliRunner."""
+"""Tests for cli package — CLI subcommands via click CliRunner."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ class TestCli:
 class TestSetupList:
     def test_list_no_configs(self, tmp_path: Path) -> None:
         runner = CliRunner()
-        with patch("synology_mcp.cli._CONFIG_DIR", tmp_path / "nonexistent"):
+        with patch("synology_mcp.cli.setup._CONFIG_DIR", tmp_path / "nonexistent"):
             result = runner.invoke(main, ["setup", "--list"])
         assert result.exit_code == 0
         assert "No configurations found" in result.output
@@ -103,7 +103,7 @@ class TestSetupList:
             "    enabled: true\n"
         )
         runner = CliRunner()
-        with patch("synology_mcp.cli._CONFIG_DIR", tmp_path):
+        with patch("synology_mcp.cli.setup._CONFIG_DIR", tmp_path):
             result = runner.invoke(main, ["setup", "--list"])
         assert result.exit_code == 0
         assert "my-nas.yaml" in result.output
@@ -112,7 +112,7 @@ class TestSetupList:
 
     def test_list_short_flag(self, tmp_path: Path) -> None:
         runner = CliRunner()
-        with patch("synology_mcp.cli._CONFIG_DIR", tmp_path / "nonexistent"):
+        with patch("synology_mcp.cli.setup._CONFIG_DIR", tmp_path / "nonexistent"):
             result = runner.invoke(main, ["setup", "-l"])
         assert result.exit_code == 0
         assert "No configurations found" in result.output
@@ -120,7 +120,7 @@ class TestSetupList:
     def test_list_empty_directory(self, tmp_path: Path) -> None:
         """Config dir exists but has no .yaml files."""
         runner = CliRunner()
-        with patch("synology_mcp.cli._CONFIG_DIR", tmp_path):
+        with patch("synology_mcp.cli.setup._CONFIG_DIR", tmp_path):
             result = runner.invoke(main, ["setup", "--list"])
         assert result.exit_code == 0
         assert "No configurations found" in result.output
@@ -130,7 +130,7 @@ class TestSetupList:
         bad_file = tmp_path / "broken.yaml"
         bad_file.write_text("{{{{invalid yaml")
         runner = CliRunner()
-        with patch("synology_mcp.cli._CONFIG_DIR", tmp_path):
+        with patch("synology_mcp.cli.setup._CONFIG_DIR", tmp_path):
             result = runner.invoke(main, ["setup", "--list"])
         assert result.exit_code == 0
         assert "broken.yaml" in result.output
@@ -144,7 +144,7 @@ class TestSetupList:
                 "modules:\n  filestation:\n    enabled: true\n"
             )
         runner = CliRunner()
-        with patch("synology_mcp.cli._CONFIG_DIR", tmp_path):
+        with patch("synology_mcp.cli.setup._CONFIG_DIR", tmp_path):
             result = runner.invoke(main, ["setup", "--list"])
         assert "nas-a.yaml" in result.output
         assert "nas-b.yaml" in result.output
@@ -167,10 +167,10 @@ class TestSetupInteractive:
         # Input order: host, https(n), permission(read), alias(""),
         # username, password, hostname-confirm(y)
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=connect_result),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=connect_result),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             result = runner.invoke(
@@ -197,10 +197,10 @@ class TestSetupInteractive:
         connect_result: dict[str, Any] = {"success": True}
 
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=connect_result),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=connect_result),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             result = runner.invoke(
@@ -225,10 +225,10 @@ class TestSetupInteractive:
         # Prompts: host, https(y), verify_ssl(n), permission(write), alias(""),
         # username, password
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=connect_result),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=connect_result),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             result = runner.invoke(
@@ -258,9 +258,9 @@ class TestSetupInteractive:
         }
 
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=False),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=False),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             result = runner.invoke(
@@ -285,10 +285,10 @@ class TestSetupInteractive:
         connect_result: dict[str, Any] = {"success": False}
 
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=connect_result),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=connect_result),
             patch.dict(os.environ, clean_env, clear=True),
         ):
             result = runner.invoke(
@@ -316,8 +316,8 @@ class TestSetupWithConfig:
         )
         runner = CliRunner()
         with (
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=None),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=None),
         ):
             result = runner.invoke(
                 main,
@@ -343,8 +343,8 @@ class TestSetupWithConfig:
         )
         runner = CliRunner()
         with (
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=None),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=None),
         ):
             result = runner.invoke(
                 main,
@@ -357,7 +357,7 @@ class TestSetupWithConfig:
 
 class TestStoreKeyring:
     def test_store_keyring_success(self) -> None:
-        from synology_mcp.cli import _store_keyring
+        from synology_mcp.cli.setup import _store_keyring
 
         mock_kr = MagicMock()
         # keyring is imported inside the function, so mock at the import target
@@ -368,7 +368,7 @@ class TestStoreKeyring:
         assert mock_kr.set_password.call_count == 2
 
     def test_store_keyring_failure(self) -> None:
-        from synology_mcp.cli import _store_keyring
+        from synology_mcp.cli.setup import _store_keyring
 
         mock_kr = MagicMock()
         mock_kr.set_password.side_effect = OSError("No backend")
@@ -394,10 +394,10 @@ class TestEmitClaudeDesktopSnippet:
         connect_result: dict[str, Any] = {"success": True}
 
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=connect_result),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=connect_result),
             patch.dict(os.environ, clean_env, clear=True),
             patch("sys.platform", "linux"),
         ):
@@ -422,10 +422,10 @@ class TestEmitClaudeDesktopSnippet:
         connect_result: dict[str, Any] = {"success": True}
 
         with (
-            patch("synology_mcp.cli._CONFIG_DIR", config_dir),
+            patch("synology_mcp.cli.setup._CONFIG_DIR", config_dir),
             patch("synology_mcp.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("synology_mcp.cli._store_keyring", return_value=True),
-            patch("synology_mcp.cli.asyncio.run", return_value=connect_result),
+            patch("synology_mcp.cli.setup._store_keyring", return_value=True),
+            patch("synology_mcp.cli.setup.asyncio.run", return_value=connect_result),
             patch.dict(os.environ, clean_env, clear=True),
             patch("sys.platform", "darwin"),
         ):
@@ -453,7 +453,7 @@ class TestCheckCommand:
             "    enabled: true\n"
         )
         runner = CliRunner()
-        with patch("synology_mcp.cli.asyncio.run", return_value=None):
+        with patch("synology_mcp.cli.check.asyncio.run", return_value=None):
             result = runner.invoke(main, ["check", "-c", str(config_file)])
 
         assert "Checking credentials" in result.output
@@ -472,7 +472,7 @@ class TestCheckCommand:
             "    enabled: true\n"
         )
         runner = CliRunner()
-        with patch("synology_mcp.cli.asyncio.run", return_value=None):
+        with patch("synology_mcp.cli.check.asyncio.run", return_value=None):
             result = runner.invoke(main, ["check", "-c", str(config_file)])
 
         assert "My Server" in result.output

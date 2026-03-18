@@ -6,8 +6,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from mcp.types import ToolAnnotations
+
 if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
     from pydantic import BaseModel
+
+    from synology_mcp.server import SharedClientManager
 
 
 class PermissionTier(Enum):
@@ -65,6 +70,7 @@ class ToolInfo:
     name: str
     description: str
     permission_tier: PermissionTier = PermissionTier.READ
+    annotations: ToolAnnotations | None = None
 
 
 @dataclass
@@ -76,6 +82,24 @@ class ModuleInfo:
     required_apis: list[ApiRequirement] = field(default_factory=list)
     tools: list[ToolInfo] = field(default_factory=list)
     settings_schema: type[BaseModel] | None = None
+
+
+@dataclass
+class RegisterContext:
+    """Context passed to each module's register() function."""
+
+    server: FastMCP
+    manager: SharedClientManager
+    allowed_tools: set[str]
+    settings_dict: dict[str, Any]
+    display_name: str
+
+
+def default_annotations(tier: PermissionTier) -> ToolAnnotations:
+    """Return default ToolAnnotations for a permission tier."""
+    if tier == PermissionTier.READ:
+        return ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+    return ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 
 
 class VersionedHandler:

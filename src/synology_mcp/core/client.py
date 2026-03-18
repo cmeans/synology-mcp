@@ -149,12 +149,14 @@ class DsmClient:
         for name in sorted(_relevant_apis):
             entry = self._api_cache.get(name)
             if entry:
+                fmt_tag = f", format={entry.request_format}" if entry.request_format else ""
                 logger.debug(
-                    "  %s: path=%s, v%d–v%d",
+                    "  %s: path=%s, v%d–v%d%s",
                     name,
                     entry.path,
                     entry.min_version,
                     entry.max_version,
+                    fmt_tag,
                 )
             else:
                 logger.debug("  %s: NOT AVAILABLE", name)
@@ -262,8 +264,19 @@ class DsmClient:
         _sensitive = frozenset({"passwd", "_sid", "device_id", "otp_code"})
         log_params = {k: ("***" if k in _sensitive else v) for k, v in req_params.items()}
         retry_tag = " (retry)" if _is_retry else ""
+
+        # Always use GET with query params. DSM v2 APIs work with GET, and we
+        # pin all APIs to v2 to avoid v3 JSON request format issues. The
+        # requestFormat field in the API info is metadata about what the API
+        # supports, not a mandate to POST — on DSM 7.1, every FileStation API
+        # reports requestFormat=JSON even at v2.
         logger.debug(
-            "DSM request%s: %s/%s v%d — %s", retry_tag, api, method, resolved_version, log_params
+            "DSM GET%s: %s/%s v%d — %s",
+            retry_tag,
+            api,
+            method,
+            resolved_version,
+            log_params,
         )
 
         resp = await http.get(url, params=req_params)

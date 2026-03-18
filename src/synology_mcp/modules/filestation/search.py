@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 from synology_mcp.core.errors import SynologyError
@@ -41,7 +42,14 @@ async def search_files(
     if additional is None:
         additional = ["size", "time"]
 
+    logger = logging.getLogger(__name__)
+
     normalized = normalize_path(folder_path)
+
+    # Pin to version 2 — v3 uses JSON request format with different parameter encoding
+    # that causes silent failures (same issue as CopyMove/Delete).
+    search_version = min(2, client.negotiate_version("SYNO.FileStation.Search", max_version=2))
+    logger.debug("Using Search API v%d", search_version)
 
     # Start search
     start_params: dict[str, Any] = {
@@ -51,16 +59,20 @@ async def search_files(
     if pattern:
         if pattern.startswith("*.") and "." not in pattern[2:]:
             # Pure extension pattern like "*.mkv" — use DSM's extension filter
-            # instead of pattern, which doesn't support glob wildcards
             if not extension:
                 extension = pattern[2:]
         else:
-            # Name pattern — DSM treats this as a substring/keyword match
-            start_params["pattern"] = pattern
+            # DSM Search uses glob matching on filenames. Wrap with wildcards
+            # so a keyword like "Bambu" matches "Bambu Studio" (i.e., *Bambu*).
+            search_pattern = pattern
+            if "*" not in pattern and "?" not in pattern:
+                search_pattern = f"*{pattern}*"
+            start_params["pattern"] = search_pattern
     if extension:
         start_params["extension"] = extension
-    if filetype != "all":
-        start_params["filetype"] = filetype
+    # Always pass filetype — DSM defaults to "file" if omitted, which
+    # excludes directories from results.
+    start_params["filetype"] = filetype
     if size_from is not None:
         start_params["size_from"] = str(parse_human_size(size_from))
     if size_to is not None:
@@ -71,26 +83,36 @@ async def search_files(
         start_params["mtime_to"] = mtime_to
 
     try:
-        start_data = await client.request("SYNO.FileStation.Search", "start", params=start_params)
+        start_data = await client.request(
+            "SYNO.FileStation.Search",
+            "start",
+            version=search_version,
+            params=start_params,
+        )
     except SynologyError as e:
         return format_error("Search files", str(e), e.suggestion)
 
     taskid = start_data.get("taskid", "")
 
-    # Poll for results
+    # Poll for results. DSM search is async — start kicks it off, list checks
+    # progress. We must poll promptly: if we wait too long, the search may
+    # finish and discard results before we read them. We also don't trust
+    # finished=True on the very first poll with 0 results, as it can be a
+    # false positive on non-indexed shares.
     import asyncio
     import time
 
     start_time = time.monotonic()
-    interval = poll_interval
     all_files: list[dict[str, Any]] = []
     finished = False
+    poll_count = 0
 
     while (time.monotonic() - start_time) < timeout:
         try:
             list_data = await client.request(
                 "SYNO.FileStation.Search",
                 "list",
+                version=search_version,
                 params={
                     "taskid": taskid,
                     "additional": '["' + '","'.join(additional) + '"]',
@@ -101,19 +123,32 @@ async def search_files(
         except SynologyError as e:
             return format_error("Search files", str(e), e.suggestion)
 
+        poll_count += 1
         all_files = list_data.get("files", [])
         finished = list_data.get("finished", False)
 
-        if finished:
+        if finished and (all_files or poll_count >= 3):
+            # Trust finished=True if we have results, or after enough polls
+            # to confirm the search genuinely found nothing.
             break
 
-        await asyncio.sleep(interval)
+        await asyncio.sleep(poll_interval)
 
     # Clean up task
     with contextlib.suppress(SynologyError):
-        await client.request("SYNO.FileStation.Search", "stop", params={"taskid": taskid})
+        await client.request(
+            "SYNO.FileStation.Search",
+            "stop",
+            version=search_version,
+            params={"taskid": taskid},
+        )
     with contextlib.suppress(SynologyError):
-        await client.request("SYNO.FileStation.Search", "clean", params={"taskid": taskid})
+        await client.request(
+            "SYNO.FileStation.Search",
+            "clean",
+            version=search_version,
+            params={"taskid": taskid},
+        )
 
     # Apply client-side exclude_pattern
     excluded_count = 0

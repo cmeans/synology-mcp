@@ -1,12 +1,34 @@
 # Copy this file to integration_config.yaml and fill in your NAS details.
 # This file is .gitignored to avoid committing credentials.
+#
+# Credentials are resolved via the standard chain:
+#   1. Environment variables: SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD, SYNOLOGY_DEVICE_ID
+#   2. Config file auth section (below)
+#   3. OS keyring (set by 'synology-mcp setup')
+#
+# For 2FA NAS, run 'synology-mcp setup' first to store the device token in keyring.
+
 schema_version: 1
 
 connection:
   host: YOUR_NAS_IP
   port: 5000
+  # https: true
+  # verify_ssl: false
+
+# Optional: inline credentials (keyring or env vars preferred)
+# auth:
+#   username: your_user
+#   password: your_password
 
 modules:
   filestation:
     enabled: true
-    permission: read
+    permission: write  # 'write' needed to test copy/move/delete
+
+# Override these in integration_config.yaml to match your NAS:
+# test_paths:
+#   existing_share: /home           # A share that exists on your NAS
+#   search_folder: /home/3D         # A folder with known content to search
+#   search_keyword: Bambu           # A keyword that matches something in search_folder
+#   writable_folder: /home/Test     # A folder where tests can create/copy/delete files

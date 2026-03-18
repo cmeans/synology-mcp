@@ -1,7 +1,21 @@
 # Power user config — HTTPS, custom settings, logging.
 schema_version: 1
 instance_id: nas-primary
+alias: HomeNAS
 # check_for_updates: false  # Uncomment to disable update notices in Claude Desktop
+
+# Custom instructions prepended to the built-in server prompt.
+# Useful for guiding Claude on when to use this connection vs others.
+# Supports template variables: {display_name}, {instance_id}, {host}, {port}
+# custom_instructions: |
+#   This is the primary NAS for media and backups.
+#   Use this connection for all file operations unless the user
+#   specifies a different NAS by name.
+
+# Full replacement for the built-in server instructions.
+# Copy the built-in server.md as a starting point, customize it,
+# and point to your version. Same template variables are supported.
+# instructions_file: ~/.config/synology-mcp/my-instructions.md
 
 connection:
   host: nas.local

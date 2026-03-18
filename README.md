@@ -46,7 +46,7 @@ Copy the snippet from setup into your `claude_desktop_config.json` and restart C
 }
 ```
 
-No `env` block needed — keyring credentials are accessed automatically on all platforms.
+On Linux, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` for keyring access. The setup command generates this for you.
 
 ### 4. Verify
 
@@ -133,8 +133,36 @@ check_for_updates: false
 
 Interactive setup creates a config file for you. For manual configuration or advanced options, see `examples/`:
 - `config-minimal.yaml` — simplest possible config
-- `config-power-user.yaml` — HTTPS, custom timeouts, logging
+- `config-power-user.yaml` — HTTPS, custom timeouts, logging, instructions
 - `config-docker.yaml` — environment-variable-driven
+
+### Multi-NAS
+
+Each NAS gets its own config file, credentials, and Claude Desktop entry. Set `alias` to give Claude a name to distinguish them:
+
+```yaml
+alias: HomeNAS
+```
+
+### Custom Instructions
+
+You can customize the prompt that guides Claude's behavior with your NAS tools.
+
+**Add context** — `custom_instructions` is prepended to the built-in prompt (higher priority):
+
+```yaml
+custom_instructions: |
+  This is the admin NAS with elevated privileges.
+  Prefer this connection for file operations requiring cross-user access.
+```
+
+**Full control** — `instructions_file` replaces the built-in prompt entirely. Copy the [built-in server.md](src/synology_mcp/instructions/server.md) as a starting point:
+
+```yaml
+instructions_file: ~/.config/synology-mcp/my-instructions.md
+```
+
+Both support template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`.
 
 ## Debugging
 

@@ -78,6 +78,8 @@ class AppConfig(BaseModel, extra="forbid"):
     instance_id: str | None = None
     alias: str | None = None
     check_for_updates: bool = True
+    custom_instructions: str | None = None
+    instructions_file: str | None = None
     connection: ConnectionConfig | None = None
     auth: AuthConfig = Field(default_factory=AuthConfig)
     modules: dict[str, ModuleConfig]

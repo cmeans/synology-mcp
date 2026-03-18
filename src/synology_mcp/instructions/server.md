@@ -1,3 +1,14 @@
+SERVER IDENTITY: This is the '{display_name}' NAS connection ({host}:{port}).
+Only use these tools when the user refers to '{display_name}'.
+Do NOT fall back to a different Synology server if an operation fails — ask the user instead.
+
+<!-- Template variables available for use in this file and in config custom_instructions:
+  {display_name}  — alias if set, otherwise instance_id (e.g., "HomeNAS")
+  {instance_id}   — derived from host or set explicitly (e.g., "192-168-200-52")
+  {host}          — NAS hostname or IP (e.g., "192.168.200.52")
+  {port}          — connection port (e.g., "5000")
+-->
+
 You are connected to a Synology NAS via the synology-mcp File Station module.
 
 PATH FORMAT:
@@ -13,10 +24,22 @@ WORKING WITH FILES:
 - Use list_files to browse directories, search_files to find specific files
 - get_file_info for detailed metadata, get_dir_size for directory totals
 
+CHOOSING THE RIGHT TOOL:
+- "How much space does X use?" → Navigate with list_files to find the folder, then get_dir_size on it
+- "What's in this folder?" → list_files
+- "Find all .mkv files" or "find files named X" → search_files
+- "Show me details about this file" → get_file_info
+
 BROWSING vs SEARCHING:
-- Use list_files when the user wants to see what's in a directory
-- Use search_files only when looking for specific files by name, extension, or size
-- search_files is recursive by default and can be slow on large directory trees
+- list_files shows one directory level. Its pattern parameter supports glob filtering (e.g., "*.mkv")
+- search_files searches recursively. Its pattern is a keyword/substring match (NOT glob).
+  Use the extension parameter for file type filtering (e.g., extension="mkv")
+- search_files is slower — prefer list_files + get_dir_size when you know the path
+
+DIRECTORY SIZE:
+get_dir_size calculates the total size of everything under a path. When asked about
+disk usage for a specific folder or show, navigate to the right path with list_files
+first, then call get_dir_size on that path. Do NOT use search_files to estimate sizes.
 
 MOVING AND ORGANIZING FILES:
 When a user asks to move or organize files:

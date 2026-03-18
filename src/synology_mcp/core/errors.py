@@ -125,7 +125,26 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     ),
     421: ("Device or resource busy", "The file is in use by another process. Wait and retry."),
     599: ("No such task", "Background task not found (may have already completed)."),
+    600: (
+        "Search folder access denied",
+        "The user may not have permission to search this folder. "
+        "Try searching a specific share instead of the root path.",
+    ),
     900: ("Unexpected server error", "Check DSM logs for details."),
+    1000: (
+        "Failed to copy files",
+        "Check source paths exist and user has read permission.",
+    ),
+    1001: (
+        "Failed to move files",
+        "Check source paths exist and user has read/write permission.",
+    ),
+    1002: (
+        "Destination error during copy/move",
+        "Check destination folder exists, user has write permission, "
+        "and file ownership allows the operation. "
+        "Files owned by other users (e.g., service accounts) may require admin access.",
+    ),
     1100: (
         "Insufficient filesystem permissions",
         "The DSM user does not have write access to this shared folder. "

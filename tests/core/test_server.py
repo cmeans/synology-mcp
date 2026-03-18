@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from synology_mcp.server import MCP_INSTRUCTIONS, create_server
+from synology_mcp.server import _BASE_INSTRUCTIONS, create_server
 from tests.conftest import make_test_config
 
 
@@ -67,16 +67,16 @@ class TestCreateServer:
 
 class TestMcpInstructions:
     def test_instructions_mention_path_format(self) -> None:
-        assert "PATH FORMAT" in MCP_INSTRUCTIONS
+        assert "PATH FORMAT" in _BASE_INSTRUCTIONS
 
     def test_instructions_mention_file_sizes(self) -> None:
-        assert "FILE SIZES" in MCP_INSTRUCTIONS
+        assert "FILE SIZES" in _BASE_INSTRUCTIONS
 
     def test_instructions_mention_recycle_bin(self) -> None:
-        assert "RECYCLE BIN" in MCP_INSTRUCTIONS
+        assert "RECYCLE BIN" in _BASE_INSTRUCTIONS
 
     def test_instructions_mention_list_shares_first(self) -> None:
-        assert "list_shares" in MCP_INSTRUCTIONS
+        assert "list_shares" in _BASE_INSTRUCTIONS
 
 
 class TestFileStationSettings:

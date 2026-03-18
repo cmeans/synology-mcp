@@ -2,39 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
-import dataclasses
 import logging
 import signal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
 
 from synology_mcp.core.auth import AuthManager
 from synology_mcp.core.client import DsmClient
 from synology_mcp.core.state import ServerState
-from synology_mcp.modules import PermissionTier, filter_tools_by_permission
-from synology_mcp.modules.filestation import MODULE_INFO as FS_MODULE_INFO
-from synology_mcp.modules.filestation import FileStationSettings
-from synology_mcp.modules.filestation.listing import (
-    list_files,
-    list_recycle_bin,
-    list_shares,
-)
-from synology_mcp.modules.filestation.metadata import get_dir_size, get_file_info
-from synology_mcp.modules.filestation.operations import (
-    copy_files,
-    create_folder,
-    delete_files,
-    move_files,
-    rename,
-    restore_from_recycle_bin,
-)
-from synology_mcp.modules.filestation.search import search_files
+from synology_mcp.modules import PermissionTier, RegisterContext, filter_tools_by_permission
+from synology_mcp.modules import filestation as _filestation_mod
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from synology_mcp.core.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -46,126 +31,32 @@ def _load_instruction(name: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-MCP_INSTRUCTIONS = _load_instruction("server.md")
+_BASE_INSTRUCTIONS = _load_instruction("server.md")
 
-# Tool annotations tell Claude Desktop about operation safety
-_ANNO_READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
-_ANNO_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
-_ANNO_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
-_ANNO_IDEMPOTENT = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-)
-
-# Known module registry
-_MODULE_REGISTRY: dict[str, Any] = {
-    "filestation": FS_MODULE_INFO,
+# Known module registry — each entry exposes MODULE_INFO and register()
+_MODULE_REGISTRY: dict[str, ModuleType] = {
+    "filestation": _filestation_mod,
 }
 
 
-def create_server(config: AppConfig) -> FastMCP:
-    """Create and configure the MCP server.
+class SharedClientManager:
+    """Manages the shared DSM client lifecycle across all modules.
 
-    This sets up the FastMCP instance and registers tools based on
-    module configuration and permission tiers.
+    Handles lazy initialization, authentication, session cleanup,
+    and update notice delivery.
     """
-    server = FastMCP(
-        "synology-mcp",
-        instructions=MCP_INSTRUCTIONS,
-    )
 
-    logger.debug("Creating MCP server")
+    def __init__(self, config: AppConfig) -> None:
+        self._config = config
+        self._client: DsmClient | None = None
+        self._auth: AuthManager | None = None
+        self._server_state: ServerState = ServerState()
+        self._update_notice: str | None = None
 
-    # Determine which modules and tools to register
-    for mod_name, mod_config in config.modules.items():
-        if not mod_config.enabled:
-            logger.debug("Module '%s' is disabled, skipping", mod_name)
-            continue
-
-        if mod_name not in _MODULE_REGISTRY:
-            logger.warning("Unknown module '%s' — skipping.", mod_name)
-            continue
-
-        module_info = _MODULE_REGISTRY[mod_name]
-        tier = PermissionTier(mod_config.permission)
-        allowed_tools = filter_tools_by_permission(module_info.tools, tier)
-        logger.debug(
-            "Module '%s': permission=%s, registering %d/%d tools: %s",
-            mod_name,
-            tier.value,
-            len(allowed_tools),
-            len(module_info.tools),
-            sorted(allowed_tools),
-        )
-
-        if mod_name == "filestation":
-            _register_filestation(server, config, mod_config.settings, allowed_tools)
-
-    return server
-
-
-def _register_filestation(
-    server: FastMCP,
-    config: AppConfig,
-    settings_dict: dict[str, Any],
-    allowed_tools: set[str],
-) -> None:
-    """Register File Station tools with the MCP server."""
-    settings = FileStationSettings(**settings_dict)
-    indicator = settings.file_type_indicator
-    search_timeout = float(settings.search_timeout or settings.async_timeout)
-    copy_move_timeout = float(settings.copy_move_timeout or settings.async_timeout)
-    delete_timeout = float(settings.delete_timeout or settings.async_timeout)
-    dir_size_timeout = float(settings.dir_size_timeout or settings.async_timeout)
-    search_poll_interval = settings.search_poll_interval
-    hide_recycle = settings.hide_recycle_in_listings
-
-    @dataclasses.dataclass
-    class _LazyState:
-        client: DsmClient | None = None
-        auth: AuthManager | None = None
-        server_state: ServerState = dataclasses.field(default_factory=ServerState)
-        update_notice: str | None = None
-
-    _state = _LazyState()
-
-    def _cleanup_session() -> None:
-        """Best-effort session logout on shutdown."""
-        if _state.auth is None:
-            return
-        import asyncio
-
-        async def _logout() -> None:
-            try:
-                if _state.auth is not None:
-                    await _state.auth.logout()
-                if _state.client is not None:
-                    await _state.client.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass  # Best effort — process is exiting
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_logout())
-        except RuntimeError:
-            # No running loop — create one for cleanup
-            asyncio.run(_logout())
-
-    atexit.register(_cleanup_session)
-
-    def _signal_handler(signum: int, _frame: object) -> None:
-        """Handle SIGTERM/SIGINT for graceful shutdown."""
-        logger.debug("Received signal %d, cleaning up session", signum)
-        _cleanup_session()
-        raise SystemExit(128 + signum)
-
-    signal.signal(signal.SIGTERM, _signal_handler)
-    signal.signal(signal.SIGINT, _signal_handler)
-
-    async def _get_client() -> DsmClient:
-        if _state.client is None:
-            conn = config.connection
+    async def get_client(self) -> DsmClient:
+        """Lazily initialize and return the DSM client."""
+        if self._client is None:
+            conn = self._config.connection
             if conn is None:
                 raise RuntimeError("Server started without connection config")
             protocol = "https" if conn.https else "http"
@@ -178,330 +69,160 @@ def _register_filestation(
             await client.__aenter__()
             await client.query_api_info()
 
-            auth = AuthManager(config, client)
+            auth = AuthManager(self._config, client)
             await auth.login()
 
-            _state.client = client
-            _state.auth = auth
+            self._client = client
+            self._auth = auth
 
             # Check for updates in background — never blocks tool execution
-            if config.check_for_updates:
-                import asyncio
+            if self._config.check_for_updates:
+                asyncio.create_task(self._bg_update_check())
 
-                async def _bg_update_check() -> None:
-                    try:
-                        from synology_mcp.cli import (
-                            _check_for_update,
-                            _load_global_state,
-                            _save_global_state,
-                        )
-
-                        loop = asyncio.get_running_loop()
-                        gstate = _load_global_state()
-                        # Run the blocking PyPI check in a thread
-                        latest = await loop.run_in_executor(None, _check_for_update, gstate)
-                        _save_global_state(gstate)
-                        if latest:
-                            from synology_mcp import __version__
-
-                            _state.update_notice = (
-                                f"\n\n---\nUpdate available: synology-mcp {latest} "
-                                f"(current: {__version__}). "
-                                f"Run: synology-mcp --check-update"
-                            )
-                    except (OSError, ValueError, KeyError):
-                        pass  # Never let update check break tool functionality
-
-                asyncio.create_task(_bg_update_check())
-        if _state.client is None:
+        if self._client is None:
             raise RuntimeError("Client initialization failed")
-        return _state.client
+        return self._client
 
-    def _with_update_notice(result: str) -> str:
+    def with_update_notice(self, result: str) -> str:
         """Append update notice to tool result (first call only, then clears)."""
-        notice = _state.update_notice or ""
+        notice = self._update_notice or ""
         if notice:
-            _state.update_notice = None
+            self._update_notice = None
         return result + notice
 
-    recycle_status: dict[str, bool] = {}
-    hostname = config.display_name
+    def install_cleanup_handlers(self) -> None:
+        """Register atexit and signal handlers for graceful session cleanup."""
+        atexit.register(self._cleanup_session)
 
-    if "list_shares" in allowed_tools:
+        def _signal_handler(signum: int, _frame: object) -> None:
+            logger.debug("Received signal %d, cleaning up session", signum)
+            self._cleanup_session()
+            raise SystemExit(128 + signum)
 
-        @server.tool(
-            name="list_shares",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "list_shares"
-            ),
-            annotations=_ANNO_READ_ONLY,
-        )
-        async def tool_list_shares(
-            sort_by: str = "name",
-            sort_direction: str = "asc",
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await list_shares(
-                    client,
-                    sort_by=sort_by,
-                    sort_direction=sort_direction,
-                    recycle_bin_status=recycle_status,
-                    hostname=hostname,
-                    file_type_indicator=indicator,
-                )
+        signal.signal(signal.SIGTERM, _signal_handler)
+        signal.signal(signal.SIGINT, _signal_handler)
+
+    def _cleanup_session(self) -> None:
+        """Best-effort session logout on shutdown."""
+        if self._auth is None:
+            return
+
+        async def _logout() -> None:
+            try:
+                if self._auth is not None:
+                    await self._auth.logout()
+                if self._client is not None:
+                    await self._client.__aexit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass  # Best effort — process is exiting
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_logout())
+        except RuntimeError:
+            # No running loop — create one for cleanup
+            asyncio.run(_logout())
+
+    async def _bg_update_check(self) -> None:
+        """Background update check — appends notice on first tool result."""
+        try:
+            from synology_mcp.cli import (
+                _check_for_update,
+                _load_global_state,
+                _save_global_state,
             )
 
-    if "list_files" in allowed_tools:
+            loop = asyncio.get_running_loop()
+            gstate = _load_global_state()
+            # Run the blocking PyPI check in a thread
+            latest = await loop.run_in_executor(None, _check_for_update, gstate)
+            _save_global_state(gstate)
+            if latest:
+                from synology_mcp import __version__
 
-        @server.tool(
-            name="list_files",
-            description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "list_files"),
-            annotations=_ANNO_READ_ONLY,
-        )
-        async def tool_list_files(
-            path: str,
-            pattern: str | None = None,
-            filetype: str = "all",
-            sort_by: str = "name",
-            sort_direction: str = "asc",
-            offset: int = 0,
-            limit: int = 200,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await list_files(
-                    client,
-                    path=path,
-                    pattern=pattern,
-                    filetype=filetype,
-                    sort_by=sort_by,
-                    sort_direction=sort_direction,
-                    offset=offset,
-                    limit=limit,
-                    hide_recycle=hide_recycle,
-                    file_type_indicator=indicator,
+                self._update_notice = (
+                    f"\n\n---\nUpdate available: synology-mcp {latest} "
+                    f"(current: {__version__}). "
+                    f"Run: synology-mcp --check-update"
                 )
-            )
+        except (OSError, ValueError, KeyError):
+            pass  # Never let update check break tool functionality
 
-    if "list_recycle_bin" in allowed_tools:
 
-        @server.tool(
-            name="list_recycle_bin",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "list_recycle_bin"
-            ),
-            annotations=_ANNO_READ_ONLY,
+def create_server(config: AppConfig) -> FastMCP:
+    """Create and configure the MCP server.
+
+    This sets up the FastMCP instance and registers tools based on
+    module configuration and permission tiers.
+    """
+    # Populate template variables in the instructions so Claude can
+    # distinguish between multiple NAS connections.
+    conn = config.connection
+    template_vars = {
+        "display_name": config.display_name,
+        "instance_id": config.instance_id,
+        "host": conn.host if conn else "unknown",
+        "port": str(conn.port) if conn else "5000",
+    }
+    server_name = f"synology-{config.display_name}"
+
+    if config.instructions_file:
+        # Full replacement — user provides their own instructions file.
+        # They can copy the built-in server.md as a starting point.
+        instructions_path = Path(config.instructions_file).expanduser()
+        try:
+            instructions = instructions_path.read_text(encoding="utf-8").strip()
+        except OSError as e:
+            logger.error("Failed to load instructions_file '%s': %s", instructions_path, e)
+            instructions = _BASE_INSTRUCTIONS
+    elif config.custom_instructions:
+        # Prepend custom instructions before base — gives them priority.
+        instructions = config.custom_instructions.strip() + "\n\n" + _BASE_INSTRUCTIONS
+    else:
+        instructions = _BASE_INSTRUCTIONS
+
+    instructions = instructions.format_map(template_vars)
+
+    server = FastMCP(
+        server_name,
+        instructions=instructions,
+    )
+
+    logger.debug("Creating MCP server")
+
+    manager = SharedClientManager(config)
+    manager.install_cleanup_handlers()
+
+    # Determine which modules and tools to register
+    for mod_name, mod_config in config.modules.items():
+        if not mod_config.enabled:
+            logger.debug("Module '%s' is disabled, skipping", mod_name)
+            continue
+
+        module = _MODULE_REGISTRY.get(mod_name)
+        if module is None:
+            logger.warning("Unknown module '%s' — skipping.", mod_name)
+            continue
+
+        module_info = module.MODULE_INFO
+        tier = PermissionTier(mod_config.permission)
+        allowed_tools = filter_tools_by_permission(module_info.tools, tier)
+        logger.debug(
+            "Module '%s': permission=%s, registering %d/%d tools: %s",
+            mod_name,
+            tier.value,
+            len(allowed_tools),
+            len(module_info.tools),
+            sorted(allowed_tools),
         )
-        async def tool_list_recycle_bin(
-            share: str,
-            pattern: str | None = None,
-            sort_by: str = "mtime",
-            sort_direction: str = "desc",
-            limit: int = 100,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await list_recycle_bin(
-                    client,
-                    share=share,
-                    pattern=pattern,
-                    sort_by=sort_by,
-                    sort_direction=sort_direction,
-                    limit=limit,
-                    file_type_indicator=indicator,
-                    recycle_bin_status=recycle_status,
-                )
-            )
 
-    if "search_files" in allowed_tools:
-
-        @server.tool(
-            name="search_files",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "search_files"
-            ),
-            annotations=_ANNO_READ_ONLY,
+        ctx = RegisterContext(
+            server=server,
+            manager=manager,
+            allowed_tools=allowed_tools,
+            settings_dict=mod_config.settings,
+            display_name=config.display_name,
         )
-        async def tool_search_files(
-            folder_path: str,
-            pattern: str | None = None,
-            extension: str | None = None,
-            filetype: str = "all",
-            size_from: str | None = None,
-            size_to: str | None = None,
-            exclude_pattern: str | None = None,
-            recursive: bool = True,
-            limit: int = 500,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await search_files(
-                    client,
-                    folder_path=folder_path,
-                    pattern=pattern,
-                    extension=extension,
-                    filetype=filetype,
-                    size_from=size_from,
-                    size_to=size_to,
-                    exclude_pattern=exclude_pattern,
-                    recursive=recursive,
-                    limit=limit,
-                    file_type_indicator=indicator,
-                    timeout=search_timeout,
-                    poll_interval=search_poll_interval,
-                )
-            )
+        module.register(ctx)
 
-    if "get_file_info" in allowed_tools:
-
-        @server.tool(
-            name="get_file_info",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "get_file_info"
-            ),
-            annotations=_ANNO_READ_ONLY,
-        )
-        async def tool_get_file_info(paths: list[str]) -> str:
-            client = await _get_client()
-            return _with_update_notice(await get_file_info(client, paths=paths))
-
-    if "get_dir_size" in allowed_tools:
-
-        @server.tool(
-            name="get_dir_size",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "get_dir_size"
-            ),
-            annotations=_ANNO_READ_ONLY,
-        )
-        async def tool_get_dir_size(path: str) -> str:
-            client = await _get_client()
-            result = await get_dir_size(client, path=path, timeout=dir_size_timeout)
-            return _with_update_notice(result)
-
-    # WRITE tools
-    if "create_folder" in allowed_tools:
-
-        @server.tool(
-            name="create_folder",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "create_folder"
-            ),
-            annotations=_ANNO_IDEMPOTENT,
-        )
-        async def tool_create_folder(
-            paths: list[str],
-            force_parent: bool = True,
-        ) -> str:
-            client = await _get_client()
-            result = await create_folder(client, paths=paths, force_parent=force_parent)
-            return _with_update_notice(result)
-
-    if "rename" in allowed_tools:
-
-        @server.tool(
-            name="rename",
-            description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "rename"),
-            annotations=_ANNO_WRITE,
-        )
-        async def tool_rename(path: str, new_name: str) -> str:
-            client = await _get_client()
-            return _with_update_notice(await rename(client, path=path, new_name=new_name))
-
-    if "copy_files" in allowed_tools:
-
-        @server.tool(
-            name="copy_files",
-            description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "copy_files"),
-            annotations=_ANNO_WRITE,
-        )
-        async def tool_copy_files(
-            paths: list[str],
-            dest_folder: str,
-            overwrite: bool = False,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await copy_files(
-                    client,
-                    paths=paths,
-                    dest_folder=dest_folder,
-                    overwrite=overwrite,
-                    timeout=copy_move_timeout,
-                )
-            )
-
-    if "move_files" in allowed_tools:
-
-        @server.tool(
-            name="move_files",
-            description=next(t.description for t in FS_MODULE_INFO.tools if t.name == "move_files"),
-            annotations=_ANNO_DESTRUCTIVE,
-        )
-        async def tool_move_files(
-            paths: list[str],
-            dest_folder: str,
-            overwrite: bool = False,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await move_files(
-                    client,
-                    paths=paths,
-                    dest_folder=dest_folder,
-                    overwrite=overwrite,
-                    timeout=copy_move_timeout,
-                )
-            )
-
-    if "delete_files" in allowed_tools:
-
-        @server.tool(
-            name="delete_files",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "delete_files"
-            ),
-            annotations=_ANNO_DESTRUCTIVE,
-        )
-        async def tool_delete_files(
-            paths: list[str],
-            recursive: bool = True,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await delete_files(
-                    client,
-                    paths=paths,
-                    recursive=recursive,
-                    recycle_bin_status=recycle_status,
-                    timeout=delete_timeout,
-                )
-            )
-
-    if "restore_from_recycle_bin" in allowed_tools:
-
-        @server.tool(
-            name="restore_from_recycle_bin",
-            description=next(
-                t.description for t in FS_MODULE_INFO.tools if t.name == "restore_from_recycle_bin"
-            ),
-            annotations=_ANNO_WRITE,
-        )
-        async def tool_restore_from_recycle_bin(
-            share: str,
-            paths: list[str],
-            dest_folder: str | None = None,
-            overwrite: bool = False,
-        ) -> str:
-            client = await _get_client()
-            return _with_update_notice(
-                await restore_from_recycle_bin(
-                    client,
-                    share=share,
-                    paths=paths,
-                    dest_folder=dest_folder,
-                    overwrite=overwrite,
-                    timeout=delete_timeout,
-                )
-            )
+    return server

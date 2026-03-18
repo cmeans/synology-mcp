@@ -173,6 +173,10 @@ logging:
 |-----|------|----------|---------|-------------|
 | `schema_version` | `int` | **Yes** | — | Config format version. Current: `1`. |
 | `instance_id` | `str` | No | Derived from `connection.host` | Unique identifier for this instance. Alphanumeric + hyphens only. |
+| `alias` | `str` | No | — | Human-friendly name for this NAS (e.g., "HomeNAS"). Used as `display_name` in tool output and server identity. |
+| `check_for_updates` | `bool` | No | `true` | Check PyPI for newer versions on first tool call. |
+| `custom_instructions` | `str` | No | — | Additional instructions prepended to the built-in server prompt (higher priority). Supports template variables: `{display_name}`, `{instance_id}`, `{host}`, `{port}`. Useful for guiding Claude on when to use this connection vs others. |
+| `instructions_file` | `str` | No | — | Path to a custom `.md` file that **replaces** the built-in server instructions entirely. Copy the built-in `server.md` as a starting point. Same template variables are supported. Takes precedence over `custom_instructions`. |
 | `connection` | `object` | No | — | NAS connection details. Required unless `SYNOLOGY_HOST` env var is set. |
 | `auth` | `object` | No | `{}` | Last-resort plaintext credentials. |
 | `modules` | `object` | **Yes** | — | Module enable/disable and configuration. |
@@ -384,6 +388,11 @@ modules:
 ```yaml
 schema_version: 1
 instance_id: nas-primary
+alias: HomeNAS
+custom_instructions: |
+  This is the primary NAS for media and backups.
+  Use this connection for all file operations unless the user
+  specifies a different NAS by name.
 
 connection:
   host: nas.local

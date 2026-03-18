@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 from synology_mcp.core.errors import SynologyError
-from synology_mcp.core.formatting import format_error, format_status
+from synology_mcp.core.formatting import format_error, format_size, format_status
 from synology_mcp.modules.filestation.helpers import (
     escape_multi_path,
     normalize_path,
@@ -15,6 +16,8 @@ from synology_mcp.modules.filestation.helpers import (
 
 if TYPE_CHECKING:
     from synology_mcp.core.client import DsmClient
+
+logger = logging.getLogger(__name__)
 
 
 async def create_folder(
@@ -151,10 +154,15 @@ async def _copy_move(
     dest = normalize_path(dest_folder)
     path_param = escape_multi_path(normalized)
 
+    # Pin to version 2 — v3 uses JSON request format with different
+    # parameter encoding that our comma-separated path format doesn't support.
+    copymove_version = min(2, client.negotiate_version("SYNO.FileStation.CopyMove", max_version=2))
+
     try:
         start_data = await client.request(
             "SYNO.FileStation.CopyMove",
             "start",
+            version=copymove_version,
             params={
                 "path": path_param,
                 "dest_folder_path": dest,
@@ -170,16 +178,20 @@ async def _copy_move(
     # Poll for completion
     elapsed = 0.0
     interval = 0.5
+    status: dict[str, Any] = {}
 
     while elapsed < timeout:
         try:
             status = await client.request(
                 "SYNO.FileStation.CopyMove",
                 "status",
+                version=copymove_version,
                 params={"taskid": taskid},
             )
         except SynologyError as e:
             return format_error(f"{operation} files", str(e), e.suggestion)
+
+        logger.debug("%s status: %s", operation, status)
 
         if status.get("finished", False):
             break
@@ -189,19 +201,39 @@ async def _copy_move(
     else:
         # Timeout
         with contextlib.suppress(SynologyError):
-            await client.request("SYNO.FileStation.CopyMove", "stop", params={"taskid": taskid})
+            await client.request(
+                "SYNO.FileStation.CopyMove",
+                "stop",
+                version=copymove_version,
+                params={"taskid": taskid},
+            )
         return format_error(
             f"{operation} files",
             f"Timed out after {timeout}s.",
             "The operation may still be running on the NAS.",
         )
 
+    # Check for errors in the completed task
+    if "error" in status:
+        err = status["error"]
+        err_code = err.get("code", 0) if isinstance(err, dict) else err
+        err_path = status.get("path", "")
+        return format_error(
+            f"{operation} files",
+            f"DSM error code {err_code} on path: {err_path}",
+            "Check that source paths exist and you have permission to access them.",
+        )
+
     # Build response
+    processed_size = status.get("processed_size", 0)
     verb = "Copied" if not remove_src else "Moved"
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
     for p in normalized:
         name = p.split("/")[-1]
         lines.append(f"  {name}")
+
+    if processed_size > 0:
+        lines.append(f"\nTotal size: {format_size(processed_size)}")
 
     if remove_src:
         # Extract source directories
@@ -224,10 +256,14 @@ async def delete_files(
     normalized = [normalize_path(p) for p in paths]
     path_param = escape_multi_path(normalized)
 
+    # Pin to version 2 — v3 uses JSON request format with different parameter encoding.
+    delete_version = min(2, client.negotiate_version("SYNO.FileStation.Delete", max_version=2))
+
     try:
         start_data = await client.request(
             "SYNO.FileStation.Delete",
             "start",
+            version=delete_version,
             params={
                 "path": path_param,
                 "recursive": str(recursive).lower(),
@@ -241,16 +277,20 @@ async def delete_files(
     # Poll for completion
     elapsed = 0.0
     interval = 0.5
+    status: dict[str, Any] = {}
 
     while elapsed < timeout:
         try:
             status = await client.request(
                 "SYNO.FileStation.Delete",
                 "status",
+                version=delete_version,
                 params={"taskid": taskid},
             )
         except SynologyError as e:
             return format_error("Delete files", str(e), e.suggestion)
+
+        logger.debug("Delete status: %s", status)
 
         if status.get("finished", False):
             break
@@ -259,11 +299,27 @@ async def delete_files(
         elapsed += interval
     else:
         with contextlib.suppress(SynologyError):
-            await client.request("SYNO.FileStation.Delete", "stop", params={"taskid": taskid})
+            await client.request(
+                "SYNO.FileStation.Delete",
+                "stop",
+                version=delete_version,
+                params={"taskid": taskid},
+            )
         return format_error(
             "Delete files",
             f"Timed out after {timeout}s.",
             "The operation may still be running on the NAS.",
+        )
+
+    # Check for errors in the completed task
+    if "error" in status:
+        err = status["error"]
+        err_code = err.get("code", 0) if isinstance(err, dict) else err
+        err_path = status.get("path", "")
+        return format_error(
+            "Delete files",
+            f"DSM error code {err_code} on path: {err_path}",
+            "Check that paths exist and you have permission to delete them.",
         )
 
     # Determine recycle bin status per share

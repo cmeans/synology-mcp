@@ -129,7 +129,6 @@ def file_type_icon(is_dir: bool, filename: str = "", style: str = "emoji") -> st
     return "\U0001f4c4" if style == "emoji" else "[FILE]"
 
 
-
 def escape_multi_path(paths: list[str]) -> str:
     """Escape and comma-join paths for DSM multi-path parameters.
 
