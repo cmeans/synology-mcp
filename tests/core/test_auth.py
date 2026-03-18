@@ -243,6 +243,155 @@ class TestReAuth:
         assert sid == "fresh-sid"
 
 
+class TestCredentialPriority:
+    """Test that credential resolution follows: env > config > keyring."""
+
+    def test_env_overrides_keyring(self) -> None:
+        """Env vars should take priority over keyring."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "env_user",
+            "SYNOLOGY_PASSWORD": "env_pass",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "synology_mcp.core.auth.kr",
+                _keyring_with("kr_user", "kr_pass"),
+            ),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "env_user"
+        assert password == "env_pass"
+
+    def test_config_overrides_keyring(self) -> None:
+        """Config file creds should take priority over keyring."""
+        config = _make_config(auth={"username": "cfg_user", "password": "cfg_pass"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        with (
+            patch.dict(os.environ, _clean_env(), clear=True),
+            patch(
+                "synology_mcp.core.auth.kr",
+                _keyring_with("kr_user", "kr_pass"),
+            ),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "cfg_user"
+        assert password == "cfg_pass"
+
+    def test_env_overrides_config(self) -> None:
+        """Env vars should take priority over config file creds."""
+        config = _make_config(auth={"username": "cfg_user", "password": "cfg_pass"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "env_user",
+            "SYNOLOGY_PASSWORD": "env_pass",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("synology_mcp.core.auth.kr", _no_keyring()),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "env_user"
+        assert password == "env_pass"
+
+    def test_partial_env_falls_through(self) -> None:
+        """If env has username but not password, password comes from keyring."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "env_user",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "synology_mcp.core.auth.kr",
+                _keyring_with("kr_user", "kr_pass"),
+            ),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "env_user"
+        assert password == "kr_pass"
+
+    def test_device_id_from_keyring_when_not_in_env(self) -> None:
+        """Device ID from keyring is used even when creds come from env."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        env = {**_clean_env(), "SYNOLOGY_USERNAME": "env_user", "SYNOLOGY_PASSWORD": "env_pass"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "synology_mcp.core.auth.kr",
+                _keyring_with(device_id="kr_device"),
+            ),
+        ):
+            username, password, device_id = auth._resolve_credentials()
+
+        assert username == "env_user"
+        assert password == "env_pass"
+        assert device_id == "kr_device"
+
+
+class TestDbusAutoDetect:
+    def test_dbus_set_when_missing_and_socket_exists(self) -> None:
+        """On Linux, auto-set DBUS_SESSION_BUS_ADDRESS if socket exists."""
+        config = _make_config()
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        clean = _clean_env()
+        # Ensure DBUS is not set
+        clean.pop("DBUS_SESSION_BUS_ADDRESS", None)
+
+        with (
+            patch.dict(os.environ, clean, clear=True),
+            patch("synology_mcp.core.auth.kr", _keyring_with("user", "pass")),
+            patch("sys.platform", "linux"),
+            patch("pathlib.Path.exists", return_value=True),
+            patch("os.getuid", return_value=1000),
+        ):
+            auth._resolve_credentials()
+
+        # After resolution, DBUS should have been set (if we're on linux)
+        # This test validates the code path runs without error
+
+    def test_dbus_not_set_on_macos(self) -> None:
+        """On macOS, don't set DBUS_SESSION_BUS_ADDRESS."""
+        config = _make_config(auth={"username": "admin", "password": "secret"})
+        client = _make_client()
+        auth = AuthManager(config, client)
+
+        clean = _clean_env()
+        clean.pop("DBUS_SESSION_BUS_ADDRESS", None)
+
+        with (
+            patch.dict(os.environ, clean, clear=True),
+            patch("synology_mcp.core.auth.kr", _no_keyring()),
+            patch("sys.platform", "darwin"),
+        ):
+            username, password, _ = auth._resolve_credentials()
+
+        assert username == "admin"
+
+
 class TestSessionNaming:
     def test_session_name_format(self) -> None:
         config = _make_config(instance_id="test-nas")

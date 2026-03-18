@@ -84,7 +84,8 @@ class AuthManager:
             logger.debug("Device ID from config file")
 
         # 3. OS keyring (implicit default — set by 'synology-mcp setup')
-        if not username or not password:
+        # Check keyring if we're missing username, password, OR device_id
+        if not username or not password or not device_id:
             # On Linux, ensure D-Bus session address is available for keyring access.
             # When launched by Claude Desktop, the env var may not be inherited.
             if sys.platform == "linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
