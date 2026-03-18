@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.2 (2026-03-17)
+
+Code quality fixes from second external review.
+
+### Bug Fixes
+
+- **No more `assert` in production** — replaced 8 bare asserts in server.py and cli.py with explicit `if`/`raise RuntimeError` checks that survive `python -O`
+- **Renamed builtin-shadowing exceptions** — `PermissionError` → `SynologyPermissionError`, `FileExistsError` → `SynologyFileExistsError` to prevent confusion with Python builtins
+- **Removed fragile is-directory heuristic** — copy/move/delete output no longer guesses file vs folder icons; plain names until type is known
+- **Session cleanup on shutdown** — `atexit` handler and SIGTERM/SIGINT signal handlers call `AuthManager.logout()` to free DSM sessions
+- **Search truncation notice** — when results exceed limit, output now shows "(showing 500 of 1,234 — increase limit to see more)"
+- **Removed dead `poll_async_task` helper** — unused generic polling function removed from helpers.py
+
+### Documentation
+
+- README install updated to `uv tool install synology-mcp` (PyPI) instead of git URL
+
 ## 0.2.1 (2026-03-18)
 
 ### Bug Fixes

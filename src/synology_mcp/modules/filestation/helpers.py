@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import fnmatch
 import logging
 import re
-from typing import TYPE_CHECKING, Any
 
 from synology_mcp.core.client import DsmClient
-from synology_mcp.core.errors import SynologyError
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -135,60 +128,6 @@ def file_type_icon(is_dir: bool, filename: str = "", style: str = "emoji") -> st
 
     return "\U0001f4c4" if style == "emoji" else "[FILE]"
 
-
-async def poll_async_task(
-    client: DsmClient,
-    taskid: str,
-    api: str,
-    method: str,
-    *,
-    timeout: float = 120.0,
-    interval: float = 0.5,
-    progress_callback: Callable[[int, int], Coroutine[Any, Any, None]] | None = None,
-) -> dict[str, Any]:
-    """Poll a DSM async task until completion or timeout.
-
-    Args:
-        client: The DSM client.
-        taskid: The task ID returned by the start call.
-        api: The DSM API name (e.g., "SYNO.FileStation.Search").
-        method: The status method (e.g., "list", "status").
-        timeout: Maximum seconds to wait.
-        interval: Seconds between polls.
-        progress_callback: Optional async callback(current, total).
-
-    Returns:
-        The final task data.
-
-    Raises:
-        SynologyError: On timeout or task error.
-    """
-    elapsed = 0.0
-
-    while elapsed < timeout:
-        data = await client.request(api, method, params={"taskid": taskid})
-
-        finished = data.get("finished", False)
-
-        if progress_callback:
-            total = data.get("total", 0)
-            progress = data.get("progress", data.get("num_dir", 0) + data.get("num_file", 0))
-            await progress_callback(progress, total)
-
-        if finished:
-            return data
-
-        await asyncio.sleep(interval)
-        elapsed += interval
-
-    # Timeout — try to stop the task
-    with contextlib.suppress(SynologyError):
-        await client.request(api, "stop", params={"taskid": taskid})
-
-    raise SynologyError(
-        f"Task timed out after {timeout}s.",
-        suggestion="Increase the timeout or narrow the scope of the operation.",
-    )
 
 
 def escape_multi_path(paths: list[str]) -> str:

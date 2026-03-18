@@ -500,12 +500,14 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     """Credential setup flow for an existing config."""
     from synology_mcp.core.config import AppConfig
 
-    assert isinstance(app_config, AppConfig)
+    if not isinstance(app_config, AppConfig):
+        raise RuntimeError("Expected AppConfig instance")
 
     if not verbose:
         _configure_logging(app_config.logging.level, app_config.logging.file)
 
-    assert app_config.connection is not None
+    if app_config.connection is None:
+        raise RuntimeError("Config missing connection settings")
     click.echo(f"Setting up credentials for {app_config.display_name}")
     click.echo(f"  Host: {app_config.connection.host}")
     click.echo(f"  Instance: {app_config.instance_id}")
@@ -619,8 +621,10 @@ async def _connect_and_login(
     from synology_mcp.core.client import DsmClient
     from synology_mcp.core.config import AppConfig
 
-    assert isinstance(config, AppConfig)
-    assert config.connection is not None
+    if not isinstance(config, AppConfig):
+        raise RuntimeError("Expected AppConfig instance")
+    if config.connection is None:
+        raise RuntimeError("Config missing connection settings")
 
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
@@ -660,8 +664,10 @@ async def _setup_login(config: object, username: str, password: str, service: st
     from synology_mcp.core.client import DsmClient
     from synology_mcp.core.config import AppConfig
 
-    assert isinstance(config, AppConfig)
-    assert config.connection is not None
+    if not isinstance(config, AppConfig):
+        raise RuntimeError("Expected AppConfig instance")
+    if config.connection is None:
+        raise RuntimeError("Config missing connection settings")
 
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"
@@ -744,8 +750,10 @@ async def _check_login(config: object) -> None:
     from synology_mcp.core.client import DsmClient
     from synology_mcp.core.config import AppConfig
 
-    assert isinstance(config, AppConfig)
-    assert config.connection is not None
+    if not isinstance(config, AppConfig):
+        raise RuntimeError("Expected AppConfig instance")
+    if config.connection is None:
+        raise RuntimeError("Config missing connection settings")
 
     protocol = "https" if config.connection.https else "http"
     base_url = f"{protocol}://{config.connection.host}:{config.connection.port}"

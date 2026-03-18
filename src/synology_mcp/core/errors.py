@@ -20,7 +20,7 @@ class SessionExpiredError(SynologyError):
     """Session expired or invalidated (codes 106, 107, 119)."""
 
 
-class PermissionError(SynologyError):  # noqa: A001
+class SynologyPermissionError(SynologyError):
     """Permission denied (code 105). NOT a session issue — never re-auth on this."""
 
 
@@ -36,7 +36,7 @@ class PathNotFoundError(FileStationError):
     """Path not found (code 408)."""
 
 
-class FileExistsError(FileStationError):  # noqa: A001
+class SynologyFileExistsError(FileStationError):
     """File already exists at destination (code 414)."""
 
 
@@ -158,7 +158,7 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
         if code == 408:
             return PathNotFoundError(message, code=code, suggestion=suggestion)
         if code == 414:
-            return FileExistsError(message, code=code, suggestion=suggestion)
+            return SynologyFileExistsError(message, code=code, suggestion=suggestion)
         if code == 416:
             return DiskFullError(message, code=code, suggestion=suggestion)
         if code in (418, 419):
@@ -169,7 +169,7 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
     if code in COMMON_ERROR_CODES:
         message, suggestion = COMMON_ERROR_CODES[code]
         if code == 105:
-            return PermissionError(message, code=code, suggestion=suggestion)
+            return SynologyPermissionError(message, code=code, suggestion=suggestion)
         if code in (106, 107, 119):
             return SessionExpiredError(message, code=code, suggestion=suggestion)
         if code == 102:

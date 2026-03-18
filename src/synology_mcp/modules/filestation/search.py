@@ -164,7 +164,10 @@ async def search_files(
         rows.append([icon, name, parent, size, modified])
 
     result = format_table(headers=headers, rows=rows, title=title)
+    total = list_data.get("total", len(all_files))
     result += f"\n\n{len(all_files)} results found"
+    if total > limit:
+        result += f" (showing {limit} of {total} — increase limit to see more)"
     if excluded_count > 0:
         result += f" ({excluded_count} excluded by filter)"
     result += "."

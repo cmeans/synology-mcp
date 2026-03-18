@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
 import dataclasses
 import logging
+import signal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -128,10 +130,44 @@ def _register_filestation(
 
     _state = _LazyState()
 
+    def _cleanup_session() -> None:
+        """Best-effort session logout on shutdown."""
+        if _state.auth is None:
+            return
+        import asyncio
+
+        async def _logout() -> None:
+            try:
+                if _state.auth is not None:
+                    await _state.auth.logout()
+                if _state.client is not None:
+                    await _state.client.__aexit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass  # Best effort — process is exiting
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_logout())
+        except RuntimeError:
+            # No running loop — create one for cleanup
+            asyncio.run(_logout())
+
+    atexit.register(_cleanup_session)
+
+    def _signal_handler(signum: int, _frame: object) -> None:
+        """Handle SIGTERM/SIGINT for graceful shutdown."""
+        logger.debug("Received signal %d, cleaning up session", signum)
+        _cleanup_session()
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
     async def _get_client() -> DsmClient:
         if _state.client is None:
             conn = config.connection
-            assert conn is not None
+            if conn is None:
+                raise RuntimeError("Server started without connection config")
             protocol = "https" if conn.https else "http"
             base_url = f"{protocol}://{conn.host}:{conn.port}"
             client = DsmClient(
@@ -177,7 +213,8 @@ def _register_filestation(
                         pass  # Never let update check break tool functionality
 
                 asyncio.create_task(_bg_update_check())
-        assert _state.client is not None
+        if _state.client is None:
+            raise RuntimeError("Client initialization failed")
         return _state.client
 
     def _with_update_notice(result: str) -> str:
@@ -391,7 +428,6 @@ def _register_filestation(
                     paths=paths,
                     dest_folder=dest_folder,
                     overwrite=overwrite,
-                    file_type_indicator=indicator,
                     timeout=copy_move_timeout,
                 )
             )
@@ -415,7 +451,6 @@ def _register_filestation(
                     paths=paths,
                     dest_folder=dest_folder,
                     overwrite=overwrite,
-                    file_type_indicator=indicator,
                     timeout=copy_move_timeout,
                 )
             )
@@ -439,7 +474,6 @@ def _register_filestation(
                     client,
                     paths=paths,
                     recursive=recursive,
-                    file_type_indicator=indicator,
                     recycle_bin_status=recycle_status,
                     timeout=delete_timeout,
                 )
@@ -468,7 +502,6 @@ def _register_filestation(
                     paths=paths,
                     dest_folder=dest_folder,
                     overwrite=overwrite,
-                    file_type_indicator=indicator,
                     timeout=delete_timeout,
                 )
             )

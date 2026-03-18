@@ -16,10 +16,10 @@ MCP server for Synology NAS devices. Exposes Synology DSM API functionality as M
 ### 1. Install
 
 ```bash
-uv tool install git+https://github.com/cmeans/synology-mcp
+uv tool install synology-mcp
 ```
 
-This installs the `synology-mcp` command globally. Requires [uv](https://docs.astral.sh/uv/).
+This installs the `synology-mcp` command globally from [PyPI](https://pypi.org/project/synology-mcp/). Requires [uv](https://docs.astral.sh/uv/).
 
 ### 2. Run setup
 

@@ -4,13 +4,13 @@ from synology_mcp.core.errors import (
     ApiNotFoundError,
     AuthenticationError,
     DiskFullError,
-    FileExistsError,
     FileStationError,
     IllegalNameError,
     PathNotFoundError,
-    PermissionError,
     SessionExpiredError,
     SynologyError,
+    SynologyFileExistsError,
+    SynologyPermissionError,
     error_from_code,
 )
 
@@ -31,7 +31,7 @@ class TestExceptionHierarchy:
 class TestErrorFromCode:
     def test_common_permission_denied(self) -> None:
         err = error_from_code(105)
-        assert isinstance(err, PermissionError)
+        assert isinstance(err, SynologyPermissionError)
         assert err.code == 105
 
     def test_session_expired_codes(self) -> None:
@@ -52,7 +52,7 @@ class TestErrorFromCode:
 
     def test_filestation_file_exists(self) -> None:
         err = error_from_code(414, api_name="SYNO.FileStation.CopyMove")
-        assert isinstance(err, FileExistsError)
+        assert isinstance(err, SynologyFileExistsError)
 
     def test_filestation_disk_full(self) -> None:
         err = error_from_code(416, api_name="SYNO.FileStation.CopyMove")

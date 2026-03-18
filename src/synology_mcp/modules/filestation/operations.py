@@ -10,7 +10,6 @@ from synology_mcp.core.errors import SynologyError
 from synology_mcp.core.formatting import format_error, format_status
 from synology_mcp.modules.filestation.helpers import (
     escape_multi_path,
-    file_type_icon,
     normalize_path,
 )
 
@@ -103,7 +102,6 @@ async def copy_files(
     paths: list[str],
     dest_folder: str,
     overwrite: bool = False,
-    file_type_indicator: str = "emoji",
     timeout: float = 120.0,
 ) -> str:
     """Copy files or folders to a destination."""
@@ -114,7 +112,6 @@ async def copy_files(
         overwrite=overwrite,
         remove_src=False,
         operation="Copy",
-        file_type_indicator=file_type_indicator,
         timeout=timeout,
     )
 
@@ -125,7 +122,6 @@ async def move_files(
     paths: list[str],
     dest_folder: str,
     overwrite: bool = False,
-    file_type_indicator: str = "emoji",
     timeout: float = 120.0,
 ) -> str:
     """Move files or folders to a new location."""
@@ -136,7 +132,6 @@ async def move_files(
         overwrite=overwrite,
         remove_src=True,
         operation="Move",
-        file_type_indicator=file_type_indicator,
         timeout=timeout,
     )
 
@@ -149,7 +144,6 @@ async def _copy_move(
     overwrite: bool,
     remove_src: bool,
     operation: str,
-    file_type_indicator: str = "emoji",
     timeout: float = 120.0,
 ) -> str:
     """Shared implementation for copy and move operations."""
@@ -207,10 +201,7 @@ async def _copy_move(
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
     for p in normalized:
         name = p.split("/")[-1]
-        # Best guess without API isdir flag: names with extensions are files
-        is_dir = "." not in name or name.startswith(".")
-        icon = file_type_icon(is_dir, name, style=file_type_indicator)
-        lines.append(f"  {icon} {name}")
+        lines.append(f"  {name}")
 
     if remove_src:
         # Extract source directories
@@ -226,7 +217,6 @@ async def delete_files(
     *,
     paths: list[str],
     recursive: bool = True,
-    file_type_indicator: str = "emoji",
     recycle_bin_status: dict[str, bool] | None = None,
     timeout: float = 120.0,
 ) -> str:
@@ -295,11 +285,7 @@ async def delete_files(
 
     lines = [format_status(f"{verb} {len(normalized)} item(s):")]
     for p in normalized:
-        name = p.split("/")[-1]
-        # Best guess without API isdir flag: names with extensions are files
-        is_dir = "." not in name or name.startswith(".")
-        icon = file_type_icon(is_dir, name, style=file_type_indicator)
-        lines.append(f"  {icon} {p}")
+        lines.append(f"  {p}")
 
     if shares_with_recycle:
         for share in sorted(shares_with_recycle):
@@ -324,7 +310,6 @@ async def restore_from_recycle_bin(
     paths: list[str],
     dest_folder: str | None = None,
     overwrite: bool = False,
-    file_type_indicator: str = "emoji",
     timeout: float = 120.0,
 ) -> str:
     """Restore files from a shared folder's recycle bin."""
@@ -365,7 +350,6 @@ async def restore_from_recycle_bin(
                 overwrite=overwrite,
                 remove_src=True,
                 operation="Restore",
-                file_type_indicator=file_type_indicator,
                 timeout=timeout,
             )
             results.append(r)
@@ -378,7 +362,6 @@ async def restore_from_recycle_bin(
         overwrite=overwrite,
         remove_src=True,
         operation="Restore",
-        file_type_indicator=file_type_indicator,
         timeout=timeout,
     )
 
