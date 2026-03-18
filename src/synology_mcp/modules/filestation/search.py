@@ -79,13 +79,14 @@ async def search_files(
 
     # Poll for results
     import asyncio
+    import time
 
-    elapsed = 0.0
+    start_time = time.monotonic()
     interval = poll_interval
     all_files: list[dict[str, Any]] = []
     finished = False
 
-    while elapsed < timeout:
+    while (time.monotonic() - start_time) < timeout:
         try:
             list_data = await client.request(
                 "SYNO.FileStation.Search",
@@ -107,7 +108,6 @@ async def search_files(
             break
 
         await asyncio.sleep(interval)
-        elapsed += interval
 
     # Clean up task
     with contextlib.suppress(SynologyError):

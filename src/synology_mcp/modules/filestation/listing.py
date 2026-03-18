@@ -121,11 +121,14 @@ async def list_files(
     files = data.get("files", [])
     total = data.get("total", len(files))
 
-    # Filter out #recycle if configured
+    # Filter out #recycle from display
+    # Use API total for pagination offset math, displayed count for the user
+    api_total = total
     if hide_recycle:
-        pre_filter = len(files)
         files = [f for f in files if f.get("name") != "#recycle"]
-        total -= pre_filter - len(files)
+        # If recycle was in this page, the visible total is one less
+        if len(files) < len(data.get("files", [])):
+            total -= 1
 
     if not files:
         return format_table(
@@ -155,13 +158,13 @@ async def list_files(
     title = f"Contents of {normalized} ({total} items)"
     result = format_table(headers=headers, rows=rows, title=title)
 
-    if offset + shown < total:
-        result += (
-            f"\n\nShowing {offset + 1}\u2013{offset + shown} of {total:,} items. "
-            f"Use offset={offset + shown} to see more."
-        )
-    else:
-        result += f"\n\nShowing {offset + 1}\u2013{offset + shown} of {total} items."
+    # Use api_total for pagination offset (includes hidden #recycle)
+    api_page_size = len(data.get("files", []))
+    next_offset = offset + api_page_size
+    if next_offset < api_total:
+        result += f"\n\nShowing {shown} of {total:,} items. Use offset={next_offset} to see more."
+    elif shown > 0:
+        result += f"\n\n{shown} of {total} items."
 
     return result
 

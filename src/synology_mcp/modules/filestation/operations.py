@@ -207,7 +207,8 @@ async def _copy_move(
     lines = [format_status(f"{verb} {len(normalized)} item(s) to {dest}/:")]
     for p in normalized:
         name = p.split("/")[-1]
-        is_dir = not ("." in name and name[0] != ".")
+        # Best guess without API isdir flag: names with extensions are files
+        is_dir = "." not in name or name.startswith(".")
         icon = file_type_icon(is_dir, name, style=file_type_indicator)
         lines.append(f"  {icon} {name}")
 
@@ -295,7 +296,8 @@ async def delete_files(
     lines = [format_status(f"{verb} {len(normalized)} item(s):")]
     for p in normalized:
         name = p.split("/")[-1]
-        is_dir = not ("." in name and name[0] != ".")
+        # Best guess without API isdir flag: names with extensions are files
+        is_dir = "." not in name or name.startswith(".")
         icon = file_type_icon(is_dir, name, style=file_type_indicator)
         lines.append(f"  {icon} {p}")
 

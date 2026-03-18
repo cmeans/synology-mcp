@@ -88,11 +88,16 @@ class AuthManager:
         if not username or not password or not device_id:
             # On Linux, ensure D-Bus session address is available for keyring access.
             # When launched by Claude Desktop, the env var may not be inherited.
+            # The keyring library reads DBUS_SESSION_BUS_ADDRESS from os.environ.
             if sys.platform == "linux" and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
-                dbus_path = f"unix:path=/run/user/{os.getuid()}/bus"
-                if Path(f"/run/user/{os.getuid()}/bus").exists():
-                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = dbus_path
-                    logger.debug("Set DBUS_SESSION_BUS_ADDRESS=%s for keyring access", dbus_path)
+                uid = os.getuid()
+                socket_path = Path(f"/run/user/{uid}/bus")
+                if socket_path.exists():
+                    dbus_addr = f"unix:path=/run/user/{uid}/bus"
+                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = dbus_addr
+                    logger.debug("Set DBUS_SESSION_BUS_ADDRESS=%s for keyring access", dbus_addr)
+                else:
+                    logger.debug("D-Bus socket not found at %s; keyring may not work", socket_path)
 
             try:
                 service = f"synology-mcp/{self._config.instance_id or 'default'}"
