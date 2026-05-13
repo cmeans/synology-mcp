@@ -23,8 +23,8 @@ connection:
 
 modules:
   downloadstation:
-    enabled: false  # default off; Phase 1 ships read-only tools — safe to enable
-    permission: read
+    enabled: false  # default off
+    permission: write  # 'write' needed to test Phase 2 create/delete/edit/pause/resume/set_*
   filestation:
     enabled: true
     permission: write  # 'write' needed to test copy/move/delete
