@@ -265,3 +265,79 @@ class TestSetDownloadConfig:
         assert params.get("method") == "setconfig"
         assert params.get("api") == "SYNO.DownloadStation.Info"
         assert params.get("bt_max_download") == "0"
+
+
+class TestSetSchedule:
+    @respx.mock
+    async def test_partial_update_sends_only_supplied_fields(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        result = await set_schedule(mock_client, enabled=False)
+        params = captured["params"]
+        assert params.get("enabled") == "false"
+        assert "schedule_plan" not in params
+        assert "Enabled" in result or "enabled" in result
+
+    async def test_schedule_plan_length_validated_client_side(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        # Should validate length and raise BEFORE any HTTP call
+        try:
+            await set_schedule(mock_client, schedule_plan="0" * 100)
+        except ToolError as e:
+            assert "168" in str(e) or "schedule_plan" in str(e)
+        else:
+            raise AssertionError("expected ToolError on bad-length schedule_plan")
+
+    @respx.mock
+    async def test_valid_schedule_plan_sent_through(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        plan = "1" * 168
+        await set_schedule(mock_client, schedule_plan=plan)
+        assert captured["params"].get("schedule_plan") == plan
+
+    async def test_no_fields_supplied_raises(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        try:
+            await set_schedule(mock_client)
+        except ToolError as e:
+            msg = str(e).lower()
+            assert "nothing" in msg or "no fields" in msg
+        else:
+            raise AssertionError("expected ToolError on no-op call")
+
+    @respx.mock
+    async def test_method_is_setconfig(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await set_schedule(mock_client, enabled=True)
+        params = captured["params"]
+        assert params.get("method") == "setconfig"
+        assert params.get("api") == "SYNO.DownloadStation.Schedule"
