@@ -413,13 +413,58 @@ async def delete_download(
     )
 
 
+async def _task_state_change(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+    method: str,
+    operation_label: str,
+) -> str:
+    """Shared shape for pause / resume / future state-toggle handlers."""
+    if not task_ids:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation_label} failed: task_ids list is empty.",
+            retryable=False,
+            param="task_ids",
+            value=task_ids,
+        )
+
+    ids_joined = ",".join(task_ids)
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            method,
+            version=1,
+            params={"id": ids_joined},
+        )
+    except SynologyError as e:
+        synology_error_response(operation_label, e)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    rows: list[list[str]] = []
+    for r in results:
+        err = r.get("error", 0)
+        status = "ok" if err == 0 else f"error {err}"
+        rows.append([r.get("id", "—"), status])
+
+    return format_table(
+        headers=["Task ID", "Result"],
+        rows=rows,
+        title=f"{operation_label} — {len(task_ids)} task(s)",
+    )
+
+
 async def pause_download(
     client: DsmClient,
     *,
     task_ids: list[str],
 ) -> str:
-    """Stub — replaced in Task 6."""
-    raise NotImplementedError("pause_download is implemented in Task 6")
+    """Pause one or more download tasks."""
+    return await _task_state_change(
+        client, task_ids=task_ids, method="pause", operation_label="Pause download"
+    )
 
 
 async def resume_download(
@@ -427,8 +472,10 @@ async def resume_download(
     *,
     task_ids: list[str],
 ) -> str:
-    """Stub — replaced in Task 6."""
-    raise NotImplementedError("resume_download is implemented in Task 6")
+    """Resume one or more paused download tasks."""
+    return await _task_state_change(
+        client, task_ids=task_ids, method="resume", operation_label="Resume download"
+    )
 
 
 async def edit_download(

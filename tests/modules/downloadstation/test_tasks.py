@@ -508,3 +508,93 @@ class TestDeleteDownload:
             force_complete=True,
         )
         assert captured["params"].get("force_complete") == "true"
+
+
+class TestPauseDownload:
+    @respx.mock
+    async def test_pause_success(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import pause_download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_001"])
+        assert "dbid_001" in result
+        assert "ok" in result.lower()
+
+    @respx.mock
+    async def test_pause_already_paused_renders_per_task_error(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.downloadstation.tasks import pause_download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": [{"id": "dbid_001", "error": 405}],
+            },
+        )
+        result = await pause_download(mock_client, task_ids=["dbid_001"])
+        assert "405" in result or "error" in result.lower()
+
+    @respx.mock
+    async def test_pause_calls_pause_method(self, mock_client: DsmClient) -> None:
+        """Regression guard — pause must call method=pause, not delete or resume."""
+        from mcp_synology.modules.downloadstation.tasks import pause_download
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await pause_download(mock_client, task_ids=["dbid_001"])
+        assert captured["params"].get("method") == "pause"
+
+    async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.tasks import pause_download
+
+        try:
+            await pause_download(mock_client, task_ids=[])
+        except ToolError as e:
+            assert "task_ids" in str(e) or "empty" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError on empty task_ids")
+
+
+class TestResumeDownload:
+    @respx.mock
+    async def test_resume_success(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import resume_download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
+        )
+        result = await resume_download(mock_client, task_ids=["dbid_001"])
+        assert "dbid_001" in result
+        assert "ok" in result.lower()
+
+    @respx.mock
+    async def test_resume_calls_resume_method(self, mock_client: DsmClient) -> None:
+        """Regression guard against the shared helper accidentally swapping
+        methods between pause/resume."""
+        from mcp_synology.modules.downloadstation.tasks import resume_download
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await resume_download(mock_client, task_ids=["dbid_001"])
+        assert captured["params"].get("method") == "resume"
