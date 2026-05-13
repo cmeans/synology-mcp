@@ -298,7 +298,14 @@ class DsmClient:
 
         if body.get("success"):
             data: dict[str, Any] = body.get("data", {})
-            logger.debug("DSM response: %s/%s — success (keys: %s)", api, method, list(data.keys()))
+            if isinstance(data, dict):
+                logger.debug(
+                    "DSM response: %s/%s — success (keys: %s)", api, method, list(data.keys())
+                )
+            else:
+                logger.debug(
+                    "DSM response: %s/%s — success (list, %d items)", api, method, len(data)
+                )
             return data
 
         code = body.get("error", {}).get("code", 0)

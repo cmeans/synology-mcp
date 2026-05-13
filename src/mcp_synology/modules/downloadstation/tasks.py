@@ -352,8 +352,65 @@ async def delete_download(
     delete_data: bool,
     force_complete: bool = False,
 ) -> str:
-    """Stub — replaced in Task 5."""
-    raise NotImplementedError("delete_download is implemented in Task 5")
+    """Delete one or more download tasks.
+
+    ``delete_data`` must be explicitly set:
+    - ``True``: call DSM Task.delete, which removes task records AND their
+      downloaded files from disk. This is DSM v1's only supported deletion
+      mode.
+    - ``False``: REFUSED — DSM v1 Task.delete has no "remove task, keep files"
+      mode. The flag is required to be explicit so the caller never assumes a
+      "safe" delete that DSM doesn't actually support.
+
+    ``force_complete`` marks errored tasks as complete before deletion.
+    """
+    if not task_ids:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Delete download failed: task_ids list is empty.",
+            retryable=False,
+            param="task_ids",
+            value=task_ids,
+        )
+
+    if not delete_data:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Delete download failed: delete_data=False is not supported. "
+            "DSM v1 Task.delete removes the task AND its files unconditionally. "
+            "Pass delete_data=True to acknowledge the destructive side effect.",
+            retryable=False,
+            param="delete_data",
+            value=False,
+        )
+
+    ids_joined = ",".join(task_ids)
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "delete",
+            version=1,
+            params={
+                "id": ids_joined,
+                "force_complete": str(force_complete).lower(),
+            },
+        )
+    except SynologyError as e:
+        synology_error_response("Delete download", e)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    rows: list[list[str]] = []
+    for r in results:
+        err = r.get("error", 0)
+        status = "ok" if err == 0 else f"error {err}"
+        rows.append([r.get("id", "—"), status])
+
+    return format_table(
+        headers=["Task ID", "Result"],
+        rows=rows,
+        title=f"Delete download — {len(task_ids)} task(s), files removed",
+    )
 
 
 async def pause_download(

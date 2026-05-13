@@ -391,3 +391,120 @@ class TestCreateDownload:
             # session error rather than silently succeeding — that's also fine
             # for this test's purpose (it documents the path).
             assert "106" in str(e) or "session" in str(e).lower()
+
+
+class TestDeleteDownload:
+    @respx.mock
+    async def test_delete_data_true_success(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import delete_download
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "data": [
+                        {"id": "dbid_001", "error": 0},
+                        {"id": "dbid_002", "error": 0},
+                    ],
+                },
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        result = await delete_download(
+            mock_client, task_ids=["dbid_001", "dbid_002"], delete_data=True
+        )
+        assert "dbid_001" in result
+        assert "dbid_002" in result
+        # Comma-joined ids in the request
+        assert captured["params"].get("id") == "dbid_001,dbid_002"
+
+    async def test_delete_data_false_refuses_with_clear_message(
+        self, mock_client: DsmClient
+    ) -> None:
+        """DSM Task.delete v1 has no documented "keep files" mode — the tool
+        refuses delete_data=False rather than silently deleting the files."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.tasks import delete_download
+
+        try:
+            await delete_download(mock_client, task_ids=["dbid_001"], delete_data=False)
+        except ToolError as e:
+            msg = str(e).lower()
+            assert "delete_data" in msg or "keep" in msg or "not supported" in msg
+        else:
+            raise AssertionError("expected ToolError on delete_data=False")
+
+    @respx.mock
+    async def test_per_task_error_rendered_in_result(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import delete_download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": [
+                    {"id": "dbid_001", "error": 0},
+                    {"id": "dbid_002", "error": 405},
+                ],
+            },
+        )
+        result = await delete_download(
+            mock_client, task_ids=["dbid_001", "dbid_002"], delete_data=True
+        )
+        assert "dbid_001" in result
+        assert "dbid_002" in result
+        assert "405" in result or "error" in result.lower()
+
+    async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.tasks import delete_download
+
+        try:
+            await delete_download(mock_client, task_ids=[], delete_data=True)
+        except ToolError as e:
+            assert "task_ids" in str(e) or "empty" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError on empty task_ids")
+
+    @respx.mock
+    async def test_dsm_error_propagates(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.tasks import delete_download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}},
+        )
+        try:
+            await delete_download(mock_client, task_ids=["dbid_001"], delete_data=True)
+        except ToolError as e:
+            assert "105" in str(e) or "permission" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError")
+
+    @respx.mock
+    async def test_force_complete_passed_to_dsm(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import delete_download
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await delete_download(
+            mock_client,
+            task_ids=["dbid_001"],
+            delete_data=True,
+            force_complete=True,
+        )
+        assert captured["params"].get("force_complete") == "true"
