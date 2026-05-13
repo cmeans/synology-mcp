@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import respx
 
-from mcp_synology.modules.downloadstation.tasks import list_downloads
+from mcp_synology.modules.downloadstation.tasks import get_download_info, list_downloads
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
@@ -143,3 +143,99 @@ class TestListDownloads:
             assert "status_filter" in str(e)
         else:
             raise AssertionError("expected ToolError for invalid status_filter")
+
+
+class TestGetDownloadInfo:
+    @respx.mock
+    async def test_returns_detail_transfer_blocks(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "tasks": [
+                        {
+                            "id": "dbid_001",
+                            "type": "bt",
+                            "title": "ubuntu.iso",
+                            "size": 1000000000,
+                            "status": 2,
+                            "additional": {
+                                "detail": {
+                                    "destination": "downloads",
+                                    "uri": "magnet:?xt=...",
+                                    "create_time": 1700000000,
+                                    "started_time": 1700000010,
+                                    "priority": "auto",
+                                },
+                                "transfer": {
+                                    "size_downloaded": 500000000,
+                                    "size_uploaded": 100000000,
+                                    "speed_download": 1024 * 1024,
+                                    "speed_upload": 256 * 1024,
+                                },
+                                "file": [
+                                    {
+                                        "filename": "ubuntu.iso",
+                                        "size": 1000000000,
+                                        "size_downloaded": 500000000,
+                                        "priority": "normal",
+                                    },
+                                ],
+                                "tracker": [
+                                    {
+                                        "url": "http://tracker.example.org/announce",
+                                        "status": "Success",
+                                        "peers": 42,
+                                        "seeds": 10,
+                                    },
+                                ],
+                                "peer": [
+                                    {
+                                        "address": "1.2.3.4",
+                                        "agent": "Transmission",
+                                        "progress": 1.0,
+                                        "speed_download": 0,
+                                        "speed_upload": 1024,
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+            }
+        )
+        result = await get_download_info(mock_client, task_id="dbid_001")
+        assert "ubuntu.iso" in result
+        assert "downloading" in result
+        assert "downloads" in result  # destination
+        assert "(50%)" in result  # transfer progress
+        assert "tracker.example.org" in result
+        assert "1.2.3.4" in result
+
+    @respx.mock
+    async def test_task_not_found_error(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 404}},
+        )
+        try:
+            await get_download_info(mock_client, task_id="dbid_missing")
+        except ToolError as e:
+            assert "404" in str(e) or "task" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError for missing task")
+
+    @respx.mock
+    async def test_empty_tasks_array_treated_as_not_found(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"tasks": []}},
+        )
+        try:
+            await get_download_info(mock_client, task_id="dbid_001")
+        except ToolError as e:
+            assert "not found" in str(e).lower() or "dbid_001" in str(e)
+        else:
+            raise AssertionError("expected ToolError when DSM returns empty tasks array")
