@@ -12,7 +12,12 @@ from mcp_synology.core.downloadstation_errors import (
     DOWNLOADSTATION_ERROR_CODES,
     DownloadStationError,
 )
-from mcp_synology.core.errors import error_from_code
+from mcp_synology.core.errors import (
+    SessionExpiredError,
+    SynologyError,
+    SynologyPermissionError,
+    error_from_code,
+)
 
 
 class TestDownloadstationErrorCodes:
@@ -51,6 +56,29 @@ class TestErrorFromCodeDispatchesDsApi:
         exc = error_from_code(400, "SYNO.FileStation.List")
         assert "invalid" in str(exc).lower()
 
-    def test_unknown_ds_code_falls_back_to_dsm_error(self) -> None:
+    def test_unknown_ds_code_falls_back_to_generic_synology_error(self) -> None:
+        # Codes not in any map should produce a generic SynologyError, NOT a
+        # DownloadStationError — the DS branch must fall through cleanly when
+        # the code isn't DS-specific.
         exc = error_from_code(999, "SYNO.DownloadStation.Task")
-        assert exc is not None
+        assert isinstance(exc, SynologyError)
+        assert not isinstance(exc, DownloadStationError)
+        assert "999" in str(exc)
+
+    def test_ds_api_105_routes_to_permission_error_not_session_expired(self) -> None:
+        # CLAUDE.md invariant: code 105 (permission denied) must NOT be a
+        # session error — never trigger re-auth. The DS branch in
+        # error_from_code() must fall through to the common 100-series
+        # handling so that 105 on a DS API still maps to SynologyPermissionError.
+        exc = error_from_code(105, "SYNO.DownloadStation.Task")
+        assert isinstance(exc, SynologyPermissionError)
+        assert not isinstance(exc, SessionExpiredError)
+        assert not isinstance(exc, DownloadStationError)
+
+    def test_ds_api_106_routes_to_session_expired(self) -> None:
+        # Symmetric guard: 106 is a session error and must route there for DS
+        # APIs too, so the transparent re-auth path in DsmClient.request() fires
+        # the same way it does for FileStation.
+        exc = error_from_code(106, "SYNO.DownloadStation.Task")
+        assert isinstance(exc, SessionExpiredError)
+        assert not isinstance(exc, DownloadStationError)
