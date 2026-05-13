@@ -55,3 +55,43 @@ def format_transfer_progress(downloaded: int, total: int) -> str:
         return f"{down_str} / {total_str} (—)"
     pct = min(100, int(downloaded * 100 / total))
     return f"{down_str} / {total_str} ({pct}%)"
+
+
+_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+# Per DSM convention: 7 days × 24 hours. Each char encodes one hour.
+SCHEDULE_PLAN_LENGTH = 7 * 24
+
+_CELL_GLYPHS: dict[str, str] = {
+    "0": ".",  # off
+    "1": "#",  # on (full)
+    "2": "~",  # throttled
+    "3": "#",  # on + eMule (older DSM) — render same as on
+}
+
+
+def format_schedule_grid(plan: str) -> str:
+    """Render a DSM Download Station weekly schedule plan as a text grid.
+
+    ``plan`` is a 168-character string (7 days × 24 hours, Sun..Sat). Each
+    character encodes one hour: '0'=off, '1'=on, '2'=throttled, '3'=on+eMule.
+
+    Output is one row per day with a 24-cell hour grid, plus a legend line.
+    """
+    if len(plan) != SCHEDULE_PLAN_LENGTH:
+        msg = (
+            f"schedule_plan must be {SCHEDULE_PLAN_LENGTH} chars "
+            f"(7 days × 24 hours), got {len(plan)}"
+        )
+        raise ValueError(msg)
+
+    hour_header = "     " + " ".join(f"{h:02d}" for h in range(24))
+    lines = [hour_header]
+    for day_idx, name in enumerate(_DAY_NAMES):
+        day_slice = plan[day_idx * 24 : (day_idx + 1) * 24]
+        cells = " ".join(_CELL_GLYPHS.get(ch, "?") for ch in day_slice)
+        lines.append(f"{name}  {cells}")
+
+    lines.append("")
+    lines.append("Legend: # = on   ~ = throttled   . = off")
+    return "\n".join(lines)

@@ -86,7 +86,8 @@ def make_api_cache() -> dict[str, ApiInfoEntry]:
         "SYNO.DownloadStation.Statistic": ApiInfoEntry(
             path="entry.cgi", min_version=1, max_version=1
         ),
-        "SYNO.DownloadStation.Info": ApiInfoEntry(
+        "SYNO.DownloadStation.Info": ApiInfoEntry(path="entry.cgi", min_version=1, max_version=1),
+        "SYNO.DownloadStation.Schedule": ApiInfoEntry(
             path="entry.cgi", min_version=1, max_version=1
         ),
     }

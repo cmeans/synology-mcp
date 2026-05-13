@@ -10,6 +10,41 @@ from mcp_synology.modules.downloadstation.helpers import (
 )
 
 
+class TestFormatScheduleGrid:
+    def test_all_off(self) -> None:
+        from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+        plan = "0" * 168
+        out = format_schedule_grid(plan)
+        assert "Sun" in out
+        assert "Sat" in out
+        assert "00" in out and "23" in out
+
+    def test_all_on(self) -> None:
+        from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+        plan = "1" * 168
+        out = format_schedule_grid(plan)
+        # '.' is the off-marker; should not appear in any grid row
+        # (the legend line is excluded from this check).
+        grid_lines = [line for line in out.splitlines() if not line.startswith("Legend")]
+        assert all("." not in line for line in grid_lines)
+
+    def test_mixed_throttle(self) -> None:
+        from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+        sunday = "0" + "1" + "2" + "0" * 21
+        plan = sunday + "0" * (168 - 24)
+        out = format_schedule_grid(plan)
+        assert "Sun" in out
+
+    def test_invalid_length_raises(self) -> None:
+        from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+        with pytest.raises(ValueError, match="168"):
+            format_schedule_grid("0" * 100)
+
+
 class TestFormatTaskStatus:
     @pytest.mark.parametrize(
         ("status_code", "expected"),

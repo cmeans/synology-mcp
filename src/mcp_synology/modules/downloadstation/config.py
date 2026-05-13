@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
+    error_response,
     format_key_value,
     synology_error_response,
 )
@@ -58,5 +59,42 @@ async def get_download_config(client: DsmClient) -> str:
 
 
 async def get_schedule(client: DsmClient) -> str:
-    """Stub — replaced in Task 7."""
-    raise NotImplementedError("get_schedule is implemented in Task 7")
+    """Get the weekly DS schedule as a 7×24 grid plus enable flags."""
+    from mcp_synology.modules.downloadstation.helpers import format_schedule_grid
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Schedule",
+            "getconfig",
+            version=1,
+        )
+    except SynologyError as e:
+        synology_error_response("Get download schedule", e)
+
+    pairs: list[tuple[str, str]] = [
+        ("Enabled", _bool_str(data.get("enabled"))),
+        ("eMule schedule enabled", _bool_str(data.get("emule_enabled"))),
+    ]
+    flags_block = format_key_value(pairs, title="Download Station schedule")
+
+    plan = data.get("schedule_plan", "")
+    if not isinstance(plan, str):
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Get download schedule failed: schedule_plan is not a string ({type(plan).__name__}).",
+            retryable=False,
+            param="schedule_plan",
+            value=str(plan),
+        )
+    try:
+        grid = format_schedule_grid(plan)
+    except ValueError as e:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Get download schedule failed: {e}",
+            retryable=False,
+            param="schedule_plan",
+            value=plan,
+        )
+
+    return f"{flags_block}\n\n{grid}"

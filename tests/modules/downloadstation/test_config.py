@@ -15,6 +15,93 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 
+class TestGetSchedule:
+    @respx.mock
+    async def test_renders_schedule_grid_and_flags(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import get_schedule
+
+        sunday = "0" + "1" + "2" + "0" * 21
+        plan = sunday + "0" * (168 - 24)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "enabled": True,
+                    "emule_enabled": False,
+                    "schedule_plan": plan,
+                },
+            }
+        )
+        result = await get_schedule(mock_client)
+        assert "Sun" in result
+        assert "Sat" in result
+        assert "Legend" in result
+        assert "Enabled" in result
+        assert "eMule" in result
+
+    @respx.mock
+    async def test_disabled_schedule_shows_flag(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import get_schedule
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "enabled": False,
+                    "emule_enabled": False,
+                    "schedule_plan": "0" * 168,
+                },
+            }
+        )
+        result = await get_schedule(mock_client)
+        # The "Enabled" pair should render "no" (format_key_value spacing
+        # may use either "Enabled: no" or "Enabled  no" — accept either).
+        assert "Enabled" in result
+        assert "no" in result
+
+    @respx.mock
+    async def test_dsm_error_propagates_as_tool_error(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.config import get_schedule
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}},
+        )
+        try:
+            await get_schedule(mock_client)
+        except ToolError as e:
+            assert "105" in str(e) or "permission" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError")
+
+    @respx.mock
+    async def test_malformed_plan_renders_error_but_does_not_crash(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.config import get_schedule
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "enabled": True,
+                    "emule_enabled": False,
+                    "schedule_plan": "0" * 100,
+                },
+            }
+        )
+        try:
+            await get_schedule(mock_client)
+        except ToolError as e:
+            assert "168" in str(e) or "schedule_plan" in str(e)
+        else:
+            raise AssertionError("expected ToolError on malformed schedule_plan")
+
+
 class TestGetDownloadConfig:
     @respx.mock
     async def test_renders_known_fields(self, mock_client: DsmClient) -> None:
