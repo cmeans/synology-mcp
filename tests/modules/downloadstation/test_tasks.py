@@ -117,7 +117,7 @@ class TestListDownloads:
             json={"success": True, "data": {"offset": 0, "total": 0, "tasks": []}},
         )
         result = await list_downloads(mock_client)
-        assert "No items to display" in result or "0 tasks" in result.lower()
+        assert "No items to display" in result
 
     @respx.mock
     async def test_dsm_error_propagates_as_tool_error(self, mock_client: DsmClient) -> None:

@@ -44,7 +44,9 @@ class TestFormatTransferProgress:
         # 512 MB / 1 GB = exactly 50% (512 * 1024 * 1024 / 1024 * 1024 * 1024)
         out = format_transfer_progress(downloaded=512 * 1024 * 1024, total=1024 * 1024 * 1024)
         assert "(50%)" in out
-        assert "512" in out
+        # Tightened beyond plan: assert the unit too so a future change to
+        # format_size's boundary doesn't pass silently.
+        assert "512 MB" in out
 
     def test_complete(self) -> None:
         out = format_transfer_progress(downloaded=1000, total=1000)

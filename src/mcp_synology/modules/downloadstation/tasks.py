@@ -5,10 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from mcp.server.fastmcp.exceptions import ToolError
-
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
+    error_response,
     format_size,
     format_table,
     synology_error_response,
@@ -62,9 +61,14 @@ async def list_downloads(
     requested — ``get_download_info`` fetches the full set for a single task.
     """
     if status_filter not in _VALID_STATUS_FILTERS:
-        valid = ", ".join(sorted(_VALID_STATUS_FILTERS))
-        msg = f"Unknown status_filter '{status_filter}'. Valid values: {valid}"
-        raise ToolError(msg)
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"List downloads failed: unknown status_filter {status_filter!r}.",
+            retryable=False,
+            param="status_filter",
+            value=status_filter,
+            valid=sorted(_VALID_STATUS_FILTERS),
+        )
 
     try:
         data = await client.request(
@@ -74,6 +78,8 @@ async def list_downloads(
             params={
                 "offset": str(offset),
                 "limit": str(limit),
+                # DS Task API uses comma-separated additional groups, not the
+                # JSON-array format FileStation v2 uses.
                 "additional": "detail,transfer",
             },
         )

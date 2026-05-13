@@ -19,6 +19,10 @@ _STATUS_LABELS: dict[int, str] = {
 }
 
 # Operator-facing groupings used by list_downloads(status_filter=...).
+# "downloading" is interpreted as "in-flight or waiting for a slot, but not
+# paused / finished / error" — so transient pre-active states (1 waiting,
+# 8 filehosting_waiting) are bucketed there alongside actively-transferring
+# states.
 STATUS_GROUPS: dict[str, set[int]] = {
     "downloading": {1, 2, 4, 6, 8, 9},
     "finished": {5, 7},
