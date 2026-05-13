@@ -22,6 +22,9 @@ connection:
 #   password: your_password
 
 modules:
+  downloadstation:
+    enabled: false  # default off; Phase 1 ships read-only tools — safe to enable
+    permission: read
   filestation:
     enabled: true
     permission: write  # 'write' needed to test copy/move/delete
