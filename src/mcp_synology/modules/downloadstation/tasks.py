@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
@@ -277,8 +278,71 @@ async def create_download(
     username: str | None = None,
     password: str | None = None,
 ) -> str:
-    """Stub — replaced in Task 4."""
-    raise NotImplementedError("create_download is implemented in Task 4")
+    """Create one or more download tasks.
+
+    Pass exactly one of:
+    - ``uri``: comma-separated URIs (HTTP, FTP, magnet, etc.)
+    - ``torrent_file_path``: local path to a .torrent or .nzb file (multipart upload)
+    """
+    if uri is None and torrent_file_path is None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Create download failed: must supply either `uri` or `torrent_file_path`.",
+            retryable=False,
+            valid=["uri", "torrent_file_path"],
+        )
+    if uri is not None and torrent_file_path is not None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Create download failed: supply exactly one of `uri` or `torrent_file_path`, not both.",
+            retryable=False,
+        )
+
+    if torrent_file_path is not None:
+        path = Path(torrent_file_path).expanduser()
+        if not path.is_file():
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"Create download failed: torrent file not found at {torrent_file_path!r}.",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+            )
+        try:
+            data = await client.create_download_task_with_file(
+                file_path=path,
+                filename=path.name,
+                destination=destination,
+                username=username,
+                password=password,
+            )
+        except SynologyError as e:
+            synology_error_response(f"Create download ({path.name})", e)
+        task_id = data.get("task_id", "—") if isinstance(data, dict) else "—"
+        return f"Created download task {task_id} from file {path.name}."
+
+    # URI path — standard GET
+    params: dict[str, str] = {"uri": uri or ""}
+    if destination is not None:
+        params["destination"] = destination
+    if username is not None:
+        params["username"] = username
+    if password is not None:
+        params["password"] = password
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "create",
+            version=1,
+            params=params,
+        )
+    except SynologyError as e:
+        synology_error_response("Create download", e)
+
+    task_id = data.get("task_id", "—") if isinstance(data, dict) else "—"
+    n_uris = len((uri or "").split(","))
+    return f"Created {n_uris} download task(s); first id: {task_id}."
 
 
 async def delete_download(
