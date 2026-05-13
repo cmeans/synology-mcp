@@ -266,3 +266,55 @@ async def get_download_info(
         )
 
     return "\n\n".join(sections)
+
+
+async def create_download(
+    client: DsmClient,
+    *,
+    uri: str | None = None,
+    torrent_file_path: str | None = None,
+    destination: str | None = None,
+    username: str | None = None,
+    password: str | None = None,
+) -> str:
+    """Stub — replaced in Task 4."""
+    raise NotImplementedError("create_download is implemented in Task 4")
+
+
+async def delete_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+    delete_data: bool,
+    force_complete: bool = False,
+) -> str:
+    """Stub — replaced in Task 5."""
+    raise NotImplementedError("delete_download is implemented in Task 5")
+
+
+async def pause_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+) -> str:
+    """Stub — replaced in Task 6."""
+    raise NotImplementedError("pause_download is implemented in Task 6")
+
+
+async def resume_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+) -> str:
+    """Stub — replaced in Task 6."""
+    raise NotImplementedError("resume_download is implemented in Task 6")
+
+
+async def edit_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+    destination: str | None = None,
+) -> str:
+    """Stub — replaced in Task 7."""
+    raise NotImplementedError("edit_download is implemented in Task 7")

@@ -46,23 +46,52 @@ class TestDownloadstationModuleRegister:
         assert len(required) == 1
         assert required[0].api_name == "SYNO.DownloadStation.Task"
 
-    def test_module_info_phase1_tools_present(self) -> None:
+    def test_module_info_tools_present(self) -> None:
         tool_names = {t.name for t in MODULE_INFO.tools}
+        # Phase 1 + Phase 2 — Phase 3 (BT search + RSS) lands separately.
         assert tool_names == {
+            # Phase 1 READ
+            "list_downloads",
+            "get_download_info",
+            "get_download_stats",
+            "get_download_config",
+            "get_schedule",
+            # Phase 2 WRITE
+            "create_download",
+            "delete_download",
+            "pause_download",
+            "resume_download",
+            "edit_download",
+            "set_download_config",
+            "set_schedule",
+        }
+
+    def test_module_info_phase1_tools_are_read_phase2_tools_are_write(self) -> None:
+        from mcp_synology.modules import PermissionTier
+
+        read_names = {
             "list_downloads",
             "get_download_info",
             "get_download_stats",
             "get_download_config",
             "get_schedule",
         }
-
-    def test_module_info_phase1_tools_are_all_read_tier(self) -> None:
-        from mcp_synology.modules import PermissionTier
-
+        write_names = {
+            "create_download",
+            "delete_download",
+            "pause_download",
+            "resume_download",
+            "edit_download",
+            "set_download_config",
+            "set_schedule",
+        }
         for tool in MODULE_INFO.tools:
-            assert tool.permission_tier == PermissionTier.READ, (
-                f"Phase 1 tool {tool.name} should be READ tier, got {tool.permission_tier}"
-            )
+            if tool.name in read_names:
+                assert tool.permission_tier == PermissionTier.READ, f"{tool.name} should be READ"
+            elif tool.name in write_names:
+                assert tool.permission_tier == PermissionTier.WRITE, f"{tool.name} should be WRITE"
+            else:
+                raise AssertionError(f"unexpected tool {tool.name}")
 
     def test_register_no_tools_when_none_allowed(self) -> None:
         server, _manager, ctx = _make_ctx(allowed=set())

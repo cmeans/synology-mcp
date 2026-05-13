@@ -98,3 +98,27 @@ async def get_schedule(client: DsmClient) -> str:
         )
 
     return f"{flags_block}\n\n{grid}"
+
+
+async def set_download_config(
+    client: DsmClient,
+    *,
+    bt_max_download: int | None = None,
+    bt_max_upload: int | None = None,
+    emule_max_download: int | None = None,
+    emule_max_upload: int | None = None,
+    default_destination: str | None = None,
+) -> str:
+    """Stub — replaced in Task 8."""
+    raise NotImplementedError("set_download_config is implemented in Task 8")
+
+
+async def set_schedule(
+    client: DsmClient,
+    *,
+    enabled: bool | None = None,
+    emule_enabled: bool | None = None,
+    schedule_plan: str | None = None,
+) -> str:
+    """Stub — replaced in Task 9."""
+    raise NotImplementedError("set_schedule is implemented in Task 9")

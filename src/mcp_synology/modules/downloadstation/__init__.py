@@ -92,6 +92,77 @@ MODULE_INFO = ModuleInfo(
             ),
             permission_tier=PermissionTier.READ,
         ),
+        # Phase 2 WRITE tools
+        ToolInfo(
+            name="create_download",
+            description=(
+                "Create one or more download tasks. Pass a comma-separated list of "
+                "URIs (HTTP, FTP, magnet, etc.) via `uri` OR pass a local path to "
+                "a .torrent / .nzb file via `torrent_file_path`. `destination` is a "
+                "share-relative path (omit to use DSM's default destination). "
+                "`username` / `password` may be supplied for protected URLs."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
+        ToolInfo(
+            name="delete_download",
+            description=(
+                "Delete one or more download tasks. `task_ids` is a list. "
+                "`delete_data` MUST be set explicitly to true or false — true also "
+                "removes the downloaded files from disk, false removes the task "
+                "record only. `force_complete` (default false) marks errored tasks "
+                "as complete before deletion."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
+        ToolInfo(
+            name="pause_download",
+            description=(
+                "Pause one or more download tasks. `task_ids` is a list. Pausing "
+                "an already-paused task is a no-op for that id; pausing a finished "
+                "task returns invalid task action."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
+        ToolInfo(
+            name="resume_download",
+            description=(
+                "Resume one or more paused download tasks. `task_ids` is a list. "
+                "Resuming an already-active task is a no-op for that id."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
+        ToolInfo(
+            name="edit_download",
+            description=(
+                "Edit task parameters. `task_ids` is a list. Currently supports "
+                "`destination` (move the task's output target). Other DSM "
+                "Task.edit fields may be supported depending on DSM version — "
+                "verify against the live API before relying on additional fields."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
+        ToolInfo(
+            name="set_download_config",
+            description=(
+                "Set Download Station global configuration. All parameters are "
+                "optional — only fields you pass get updated. Rates are KB/s; 0 "
+                "means unlimited. Pass `default_destination` to change DS's "
+                "default destination share."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
+        ToolInfo(
+            name="set_schedule",
+            description=(
+                "Set the Download Station weekly schedule. `schedule_plan` is a "
+                "168-character string (7 days × 24 hours, Sun=0 .. Sat=6); each "
+                "char is '0' off, '1' on, '2' throttled. `enabled` and "
+                "`emule_enabled` toggle whether the schedule applies. All "
+                "parameters optional — only what you pass gets updated."
+            ),
+            permission_tier=PermissionTier.WRITE,
+        ),
     ],
     settings_schema=DownloadStationSettings,
 )
@@ -182,3 +253,141 @@ def register(ctx: RegisterContext) -> None:
         async def tool_get_schedule() -> str:
             client = await manager.get_client()
             return await get_schedule(client)
+
+    if "create_download" in ctx.allowed_tools:
+
+        @server.tool(
+            name="create_download",
+            description=_desc("create_download"),
+            annotations=_tool_annos["create_download"],
+        )
+        async def tool_create_download(
+            uri: str | None = None,
+            torrent_file_path: str | None = None,
+            destination: str | None = None,
+            username: str | None = None,
+            password: str | None = None,
+        ) -> str:
+            from mcp_synology.modules.downloadstation.tasks import create_download
+
+            client = await manager.get_client()
+            return await create_download(
+                client,
+                uri=uri,
+                torrent_file_path=torrent_file_path,
+                destination=destination,
+                username=username,
+                password=password,
+            )
+
+    if "delete_download" in ctx.allowed_tools:
+
+        @server.tool(
+            name="delete_download",
+            description=_desc("delete_download"),
+            annotations=_tool_annos["delete_download"],
+        )
+        async def tool_delete_download(
+            task_ids: list[str],
+            delete_data: bool,
+            force_complete: bool = False,
+        ) -> str:
+            from mcp_synology.modules.downloadstation.tasks import delete_download
+
+            client = await manager.get_client()
+            return await delete_download(
+                client,
+                task_ids=task_ids,
+                delete_data=delete_data,
+                force_complete=force_complete,
+            )
+
+    if "pause_download" in ctx.allowed_tools:
+
+        @server.tool(
+            name="pause_download",
+            description=_desc("pause_download"),
+            annotations=_tool_annos["pause_download"],
+        )
+        async def tool_pause_download(task_ids: list[str]) -> str:
+            from mcp_synology.modules.downloadstation.tasks import pause_download
+
+            client = await manager.get_client()
+            return await pause_download(client, task_ids=task_ids)
+
+    if "resume_download" in ctx.allowed_tools:
+
+        @server.tool(
+            name="resume_download",
+            description=_desc("resume_download"),
+            annotations=_tool_annos["resume_download"],
+        )
+        async def tool_resume_download(task_ids: list[str]) -> str:
+            from mcp_synology.modules.downloadstation.tasks import resume_download
+
+            client = await manager.get_client()
+            return await resume_download(client, task_ids=task_ids)
+
+    if "edit_download" in ctx.allowed_tools:
+
+        @server.tool(
+            name="edit_download",
+            description=_desc("edit_download"),
+            annotations=_tool_annos["edit_download"],
+        )
+        async def tool_edit_download(
+            task_ids: list[str],
+            destination: str | None = None,
+        ) -> str:
+            from mcp_synology.modules.downloadstation.tasks import edit_download
+
+            client = await manager.get_client()
+            return await edit_download(client, task_ids=task_ids, destination=destination)
+
+    if "set_download_config" in ctx.allowed_tools:
+
+        @server.tool(
+            name="set_download_config",
+            description=_desc("set_download_config"),
+            annotations=_tool_annos["set_download_config"],
+        )
+        async def tool_set_download_config(
+            bt_max_download: int | None = None,
+            bt_max_upload: int | None = None,
+            emule_max_download: int | None = None,
+            emule_max_upload: int | None = None,
+            default_destination: str | None = None,
+        ) -> str:
+            from mcp_synology.modules.downloadstation.config import set_download_config
+
+            client = await manager.get_client()
+            return await set_download_config(
+                client,
+                bt_max_download=bt_max_download,
+                bt_max_upload=bt_max_upload,
+                emule_max_download=emule_max_download,
+                emule_max_upload=emule_max_upload,
+                default_destination=default_destination,
+            )
+
+    if "set_schedule" in ctx.allowed_tools:
+
+        @server.tool(
+            name="set_schedule",
+            description=_desc("set_schedule"),
+            annotations=_tool_annos["set_schedule"],
+        )
+        async def tool_set_schedule(
+            enabled: bool | None = None,
+            emule_enabled: bool | None = None,
+            schedule_plan: str | None = None,
+        ) -> str:
+            from mcp_synology.modules.downloadstation.config import set_schedule
+
+            client = await manager.get_client()
+            return await set_schedule(
+                client,
+                enabled=enabled,
+                emule_enabled=emule_enabled,
+                schedule_plan=schedule_plan,
+            )
