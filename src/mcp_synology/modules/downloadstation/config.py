@@ -109,8 +109,48 @@ async def set_download_config(
     emule_max_upload: int | None = None,
     default_destination: str | None = None,
 ) -> str:
-    """Stub — replaced in Task 8."""
-    raise NotImplementedError("set_download_config is implemented in Task 8")
+    """Set DS global configuration. Only supplied fields are updated.
+
+    Rates are KB/s; pass 0 to mean unlimited.
+    """
+    fields: dict[str, str] = {}
+    if bt_max_download is not None:
+        fields["bt_max_download"] = str(bt_max_download)
+    if bt_max_upload is not None:
+        fields["bt_max_upload"] = str(bt_max_upload)
+    if emule_max_download is not None:
+        fields["emule_max_download"] = str(emule_max_download)
+    if emule_max_upload is not None:
+        fields["emule_max_upload"] = str(emule_max_upload)
+    if default_destination is not None:
+        fields["default_destination"] = default_destination
+
+    if not fields:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Set download config failed: no fields supplied (nothing to change).",
+            retryable=False,
+            valid=[
+                "bt_max_download",
+                "bt_max_upload",
+                "emule_max_download",
+                "emule_max_upload",
+                "default_destination",
+            ],
+        )
+
+    try:
+        await client.request(
+            "SYNO.DownloadStation.Info",
+            "setconfig",
+            version=1,
+            params=fields,
+        )
+    except SynologyError as e:
+        synology_error_response("Set download config", e)
+
+    pairs: list[tuple[str, str]] = list(fields.items())
+    return format_key_value(pairs, title=f"Set download config — {len(fields)} field(s) updated")
 
 
 async def set_schedule(
