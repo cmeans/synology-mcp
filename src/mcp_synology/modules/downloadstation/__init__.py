@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from mcp_synology.modules import (
     ApiRequirement,
@@ -24,9 +24,12 @@ if TYPE_CHECKING:
 
 
 class DownloadStationSettings(BaseModel):
-    """Download Station module settings."""
+    """Download Station module settings.
 
-    enabled_extras: list[str] = Field(default_factory=list)
+    Phase 1 has no settings; the schema is declared so server.py module-loading
+    machinery can pass an empty settings dict cleanly. Fields land in the task
+    that needs them.
+    """
 
 
 MODULE_INFO = ModuleInfo(
