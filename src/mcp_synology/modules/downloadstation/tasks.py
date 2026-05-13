@@ -484,5 +484,50 @@ async def edit_download(
     task_ids: list[str],
     destination: str | None = None,
 ) -> str:
-    """Stub — replaced in Task 7."""
-    raise NotImplementedError("edit_download is implemented in Task 7")
+    """Edit task parameters. Currently supports ``destination`` only.
+
+    DSM ``Task.edit`` v1's full supported-field set varies by DSM version. The
+    tool only exposes ``destination`` for Phase 2; expansion is follow-up work
+    once additional fields are verified against a live NAS.
+    """
+    if not task_ids:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Edit download failed: task_ids list is empty.",
+            retryable=False,
+            param="task_ids",
+            value=task_ids,
+        )
+    if destination is None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Edit download failed: no editable fields supplied "
+            "(destination is the only currently-supported field).",
+            retryable=False,
+            valid=["destination"],
+        )
+
+    ids_joined = ",".join(task_ids)
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "edit",
+            version=1,
+            params={"id": ids_joined, "destination": destination},
+        )
+    except SynologyError as e:
+        synology_error_response("Edit download", e)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    rows: list[list[str]] = []
+    for r in results:
+        err = r.get("error", 0)
+        status = "ok" if err == 0 else f"error {err}"
+        rows.append([r.get("id", "—"), status])
+
+    return format_table(
+        headers=["Task ID", "Result"],
+        rows=rows,
+        title=f"Edit download — {len(task_ids)} task(s), destination={destination}",
+    )

@@ -598,3 +598,71 @@ class TestResumeDownload:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
         await resume_download(mock_client, task_ids=["dbid_001"])
         assert captured["params"].get("method") == "resume"
+
+
+class TestEditDownload:
+    @respx.mock
+    async def test_edit_destination_success(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import edit_download
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json={"success": True, "data": [{"id": "dbid_001", "error": 0}]},
+            )
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        result = await edit_download(mock_client, task_ids=["dbid_001"], destination="new_share")
+        assert "dbid_001" in result
+        assert captured["params"].get("destination") == "new_share"
+        assert captured["params"].get("method") == "edit"
+
+    async def test_no_destination_raises(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.tasks import edit_download
+
+        try:
+            await edit_download(mock_client, task_ids=["dbid_001"])
+        except ToolError as e:
+            msg = str(e).lower()
+            assert "destination" in msg or "nothing" in msg or "no editable" in msg
+        else:
+            raise AssertionError("expected ToolError when no edit fields supplied")
+
+    async def test_empty_task_ids_raises(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.tasks import edit_download
+
+        try:
+            await edit_download(mock_client, task_ids=[], destination="downloads")
+        except ToolError as e:
+            assert "task_ids" in str(e) or "empty" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError on empty task_ids")
+
+    @respx.mock
+    async def test_per_task_error_rendered(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.tasks import edit_download
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": [
+                    {"id": "dbid_001", "error": 0},
+                    {"id": "dbid_002", "error": 407},  # set destination failed
+                ],
+            },
+        )
+        result = await edit_download(
+            mock_client,
+            task_ids=["dbid_001", "dbid_002"],
+            destination="downloads",
+        )
+        assert "dbid_001" in result
+        assert "dbid_002" in result
+        assert "407" in result or "error" in result.lower()
