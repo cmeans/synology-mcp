@@ -17,6 +17,7 @@ from mcp_synology.core.auth import AuthManager
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.state import ServerState
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
+from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
 from mcp_synology.modules import system as _system_mod
 
@@ -65,6 +66,7 @@ def _platform_label() -> str:
 
 # Known module registry — each entry exposes MODULE_INFO and register()
 _MODULE_REGISTRY: dict[str, ModuleType] = {
+    "downloadstation": _downloadstation_mod,
     "filestation": _filestation_mod,
     "system": _system_mod,
 }
