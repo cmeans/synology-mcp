@@ -48,6 +48,13 @@ def _format_eta(downloaded: int, total: int, speed: int) -> str:
     return f"{seconds // 86400}d{(seconds % 86400) // 3600}h"
 
 
+def _format_epoch(epoch: int | None) -> str:
+    """Render an epoch timestamp using the shared formatter; '—' for None/0."""
+    if not epoch:
+        return "—"
+    return format_timestamp(float(epoch))
+
+
 async def list_downloads(
     client: DsmClient,
     *,
@@ -277,10 +284,3 @@ async def get_download_info(
         )
 
     return "\n\n".join(sections)
-
-
-def _format_epoch(epoch: int | None) -> str:
-    """Render an epoch timestamp using the shared formatter; '—' for None/0."""
-    if not epoch:
-        return "—"
-    return format_timestamp(float(epoch))

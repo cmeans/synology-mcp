@@ -209,6 +209,10 @@ class TestGetDownloadInfo:
         assert "downloading" in result
         assert "downloads" in result  # destination
         assert "(50%)" in result  # transfer progress
+        # Section headers should all be present.
+        assert "Files" in result
+        assert "Trackers" in result
+        assert "Peers" in result
         assert "tracker.example.org" in result
         assert "1.2.3.4" in result
 
