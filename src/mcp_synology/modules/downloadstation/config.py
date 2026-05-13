@@ -98,3 +98,116 @@ async def get_schedule(client: DsmClient) -> str:
         )
 
     return f"{flags_block}\n\n{grid}"
+
+
+async def set_download_config(
+    client: DsmClient,
+    *,
+    bt_max_download: int | None = None,
+    bt_max_upload: int | None = None,
+    emule_max_download: int | None = None,
+    emule_max_upload: int | None = None,
+    default_destination: str | None = None,
+) -> str:
+    """Set DS global configuration. Only supplied fields are updated.
+
+    Rates are KB/s; pass 0 to mean unlimited.
+    """
+    fields: dict[str, str] = {}
+    if bt_max_download is not None:
+        fields["bt_max_download"] = str(bt_max_download)
+    if bt_max_upload is not None:
+        fields["bt_max_upload"] = str(bt_max_upload)
+    if emule_max_download is not None:
+        fields["emule_max_download"] = str(emule_max_download)
+    if emule_max_upload is not None:
+        fields["emule_max_upload"] = str(emule_max_upload)
+    if default_destination is not None:
+        fields["default_destination"] = default_destination
+
+    if not fields:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Set download config failed: no fields supplied (nothing to change).",
+            retryable=False,
+            valid=[
+                "bt_max_download",
+                "bt_max_upload",
+                "emule_max_download",
+                "emule_max_upload",
+                "default_destination",
+            ],
+        )
+
+    try:
+        await client.request(
+            "SYNO.DownloadStation.Info",
+            "setconfig",
+            version=1,
+            params=fields,
+        )
+    except SynologyError as e:
+        synology_error_response("Set download config", e)
+
+    pairs: list[tuple[str, str]] = list(fields.items())
+    return format_key_value(pairs, title=f"Set download config — {len(fields)} field(s) updated")
+
+
+async def set_schedule(
+    client: DsmClient,
+    *,
+    enabled: bool | None = None,
+    emule_enabled: bool | None = None,
+    schedule_plan: str | None = None,
+) -> str:
+    """Set the DS weekly schedule. Only supplied fields are updated.
+
+    ``schedule_plan`` must be exactly 168 characters (7 days × 24 hours). The
+    length is validated client-side so a clear error surfaces locally before
+    the request reaches DSM.
+    """
+    from mcp_synology.modules.downloadstation.helpers import SCHEDULE_PLAN_LENGTH
+
+    fields: dict[str, str] = {}
+    if enabled is not None:
+        fields["enabled"] = str(enabled).lower()
+    if emule_enabled is not None:
+        fields["emule_enabled"] = str(emule_enabled).lower()
+    if schedule_plan is not None:
+        if len(schedule_plan) != SCHEDULE_PLAN_LENGTH:
+            error_response(
+                ErrorCode.INVALID_PARAMETER,
+                f"Set schedule failed: schedule_plan must be {SCHEDULE_PLAN_LENGTH} chars "
+                f"(7 days × 24 hours), got {len(schedule_plan)}.",
+                retryable=False,
+                param="schedule_plan",
+                value=schedule_plan,
+            )
+        fields["schedule_plan"] = schedule_plan
+
+    if not fields:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Set schedule failed: no fields supplied (nothing to change).",
+            retryable=False,
+            valid=["enabled", "emule_enabled", "schedule_plan"],
+        )
+
+    try:
+        await client.request(
+            "SYNO.DownloadStation.Schedule",
+            "setconfig",
+            version=1,
+            params=fields,
+        )
+    except SynologyError as e:
+        synology_error_response("Set download schedule", e)
+
+    # Don't echo the full 168-char plan back; just note it was set.
+    pairs: list[tuple[str, str]] = []
+    for k, v in fields.items():
+        if k == "schedule_plan":
+            pairs.append((k, f"<set to {len(v)}-char plan>"))
+        else:
+            pairs.append((k, v))
+    return format_key_value(pairs, title=f"Set download schedule — {len(fields)} field(s) updated")

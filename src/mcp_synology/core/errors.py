@@ -268,6 +268,19 @@ def error_from_code(code: int, api_name: str = "") -> SynologyError:
     for Auth vs FileStation APIs. This function checks API-specific codes
     first, then falls back to common codes.
     """
+    # Download Station codes (400-series for SYNO.DownloadStation.*)
+    # Deferred import to avoid a circular dependency: downloadstation_errors
+    # imports from this module (errors.py), so we cannot import it at module top.
+    if "DownloadStation" in api_name:
+        from mcp_synology.core.downloadstation_errors import (  # noqa: PLC0415
+            DOWNLOADSTATION_ERROR_CODES,
+            DownloadStationError,
+        )
+
+        if code in DOWNLOADSTATION_ERROR_CODES:
+            message, suggestion = DOWNLOADSTATION_ERROR_CODES[code]
+            return DownloadStationError(message, code=code, suggestion=suggestion)
+
     # Auth API codes (400-series for SYNO.API.Auth)
     if "Auth" in api_name and code in AUTH_ERROR_CODES:
         message, suggestion = AUTH_ERROR_CODES[code]

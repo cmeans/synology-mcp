@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import ErrorCode, SynologyError
@@ -266,3 +267,267 @@ async def get_download_info(
         )
 
     return "\n\n".join(sections)
+
+
+async def create_download(
+    client: DsmClient,
+    *,
+    uri: str | None = None,
+    torrent_file_path: str | None = None,
+    destination: str | None = None,
+    username: str | None = None,
+    password: str | None = None,
+) -> str:
+    """Create one or more download tasks.
+
+    Pass exactly one of:
+    - ``uri``: comma-separated URIs (HTTP, FTP, magnet, etc.)
+    - ``torrent_file_path``: local path to a .torrent or .nzb file (multipart upload)
+    """
+    if uri is None and torrent_file_path is None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Create download failed: must supply either `uri` or `torrent_file_path`.",
+            retryable=False,
+            valid=["uri", "torrent_file_path"],
+        )
+    if uri is not None and torrent_file_path is not None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Create download failed: supply exactly one of `uri` or `torrent_file_path`, not both.",
+            retryable=False,
+        )
+
+    if torrent_file_path is not None:
+        path = Path(torrent_file_path).expanduser()
+        if not path.is_file():
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"Create download failed: torrent file not found at {torrent_file_path!r}.",
+                retryable=False,
+                param="torrent_file_path",
+                value=torrent_file_path,
+            )
+        try:
+            data = await client.create_download_task_with_file(
+                file_path=path,
+                filename=path.name,
+                destination=destination,
+                username=username,
+                password=password,
+            )
+        except SynologyError as e:
+            synology_error_response(f"Create download ({path.name})", e)
+        task_id = data.get("task_id", "—") if isinstance(data, dict) else "—"
+        return f"Created download task {task_id} from file {path.name}."
+
+    # URI path — standard GET
+    params: dict[str, str] = {"uri": uri or ""}
+    if destination is not None:
+        params["destination"] = destination
+    if username is not None:
+        params["username"] = username
+    if password is not None:
+        params["password"] = password
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "create",
+            version=1,
+            params=params,
+        )
+    except SynologyError as e:
+        synology_error_response("Create download", e)
+
+    task_id = data.get("task_id", "—") if isinstance(data, dict) else "—"
+    n_uris = len((uri or "").split(","))
+    return f"Created {n_uris} download task(s); first id: {task_id}."
+
+
+async def delete_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+    delete_data: bool,
+    force_complete: bool = False,
+) -> str:
+    """Delete one or more download tasks.
+
+    ``delete_data`` must be explicitly set:
+    - ``True``: call DSM Task.delete, which removes task records AND their
+      downloaded files from disk. This is DSM v1's only supported deletion
+      mode.
+    - ``False``: REFUSED — DSM v1 Task.delete has no "remove task, keep files"
+      mode. The flag is required to be explicit so the caller never assumes a
+      "safe" delete that DSM doesn't actually support.
+
+    ``force_complete`` marks errored tasks as complete before deletion.
+    """
+    if not task_ids:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Delete download failed: task_ids list is empty.",
+            retryable=False,
+            param="task_ids",
+            value=task_ids,
+        )
+
+    if not delete_data:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Delete download failed: delete_data=False is not supported. "
+            "DSM v1 Task.delete removes the task AND its files unconditionally. "
+            "Pass delete_data=True to acknowledge the destructive side effect.",
+            retryable=False,
+            param="delete_data",
+            value=False,
+        )
+
+    ids_joined = ",".join(task_ids)
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "delete",
+            version=1,
+            params={
+                "id": ids_joined,
+                "force_complete": str(force_complete).lower(),
+            },
+        )
+    except SynologyError as e:
+        synology_error_response("Delete download", e)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    rows: list[list[str]] = []
+    for r in results:
+        err = r.get("error", 0)
+        status = "ok" if err == 0 else f"error {err}"
+        rows.append([r.get("id", "—"), status])
+
+    return format_table(
+        headers=["Task ID", "Result"],
+        rows=rows,
+        title=f"Delete download — {len(task_ids)} task(s), files removed",
+    )
+
+
+async def _task_state_change(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+    method: str,
+    operation_label: str,
+) -> str:
+    """Shared shape for pause / resume / future state-toggle handlers."""
+    if not task_ids:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation_label} failed: task_ids list is empty.",
+            retryable=False,
+            param="task_ids",
+            value=task_ids,
+        )
+
+    ids_joined = ",".join(task_ids)
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            method,
+            version=1,
+            params={"id": ids_joined},
+        )
+    except SynologyError as e:
+        synology_error_response(operation_label, e)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    rows: list[list[str]] = []
+    for r in results:
+        err = r.get("error", 0)
+        status = "ok" if err == 0 else f"error {err}"
+        rows.append([r.get("id", "—"), status])
+
+    return format_table(
+        headers=["Task ID", "Result"],
+        rows=rows,
+        title=f"{operation_label} — {len(task_ids)} task(s)",
+    )
+
+
+async def pause_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+) -> str:
+    """Pause one or more download tasks."""
+    return await _task_state_change(
+        client, task_ids=task_ids, method="pause", operation_label="Pause download"
+    )
+
+
+async def resume_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+) -> str:
+    """Resume one or more paused download tasks."""
+    return await _task_state_change(
+        client, task_ids=task_ids, method="resume", operation_label="Resume download"
+    )
+
+
+async def edit_download(
+    client: DsmClient,
+    *,
+    task_ids: list[str],
+    destination: str | None = None,
+) -> str:
+    """Edit task parameters. Currently supports ``destination`` only.
+
+    DSM ``Task.edit`` v1's full supported-field set varies by DSM version. The
+    tool only exposes ``destination`` for Phase 2; expansion is follow-up work
+    once additional fields are verified against a live NAS.
+    """
+    if not task_ids:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Edit download failed: task_ids list is empty.",
+            retryable=False,
+            param="task_ids",
+            value=task_ids,
+        )
+    if destination is None:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            "Edit download failed: no editable fields supplied "
+            "(destination is the only currently-supported field).",
+            retryable=False,
+            valid=["destination"],
+        )
+
+    ids_joined = ",".join(task_ids)
+
+    try:
+        data = await client.request(
+            "SYNO.DownloadStation.Task",
+            "edit",
+            version=1,
+            params={"id": ids_joined, "destination": destination},
+        )
+    except SynologyError as e:
+        synology_error_response("Edit download", e)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    rows: list[list[str]] = []
+    for r in results:
+        err = r.get("error", 0)
+        status = "ok" if err == 0 else f"error {err}"
+        rows.append([r.get("id", "—"), status])
+
+    return format_table(
+        headers=["Task ID", "Result"],
+        rows=rows,
+        title=f"Edit download — {len(task_ids)} task(s), destination={destination}",
+    )
