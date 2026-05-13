@@ -341,3 +341,70 @@ class TestSetSchedule:
         params = captured["params"]
         assert params.get("method") == "setconfig"
         assert params.get("api") == "SYNO.DownloadStation.Schedule"
+
+
+class TestSetDownloadConfigEmuleFields:
+    """Targeted coverage for the emule_* branches in set_download_config."""
+
+    @respx.mock
+    async def test_emule_max_download_branch(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import set_download_config
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await set_download_config(mock_client, emule_max_download=200)
+        assert captured["params"].get("emule_max_download") == "200"
+
+    @respx.mock
+    async def test_emule_max_upload_branch(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import set_download_config
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await set_download_config(mock_client, emule_max_upload=300)
+        assert captured["params"].get("emule_max_upload") == "300"
+
+
+class TestSetScheduleEmuleAndError:
+    """Targeted coverage for set_schedule edge branches."""
+
+    @respx.mock
+    async def test_emule_enabled_branch(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        captured: dict = {}
+
+        def _capture(request):
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_capture)
+        await set_schedule(mock_client, emule_enabled=True)
+        assert captured["params"].get("emule_enabled") == "true"
+
+    @respx.mock
+    async def test_dsm_error_propagates(self, mock_client: DsmClient) -> None:
+        """Covers the SynologyError → synology_error_response branch."""
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.config import set_schedule
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 105}},
+        )
+        try:
+            await set_schedule(mock_client, enabled=True)
+        except ToolError as e:
+            assert "105" in str(e) or "permission" in str(e).lower()
+        else:
+            raise AssertionError("expected ToolError")

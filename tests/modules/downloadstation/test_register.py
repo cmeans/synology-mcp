@@ -166,3 +166,85 @@ class TestDownloadstationToolInvocation:
         result = await server._tool_manager._tools["get_schedule"].fn()
         assert result == f"<<{target}-result>>"
         mock.assert_awaited_once()
+
+
+class TestDownloadstationPhase2ToolInvocation:
+    """Invoke each registered WRITE tool closure to walk the body lines.
+
+    Mirrors TestDownloadstationToolInvocation for Phase 1. Without these the
+    seven new closures in __init__.py sit untested at module-coverage time,
+    even though their downstream handlers have direct tests.
+    """
+
+    @staticmethod
+    def _capture_call(monkeypatch, target: str) -> AsyncMock:
+        mock = AsyncMock(return_value=f"<<{target}-result>>")
+        monkeypatch.setattr(target, mock)
+        return mock
+
+    async def test_create_download_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.create_download"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["create_download"].fn(uri="magnet:?...")
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_delete_download_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.delete_download"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["delete_download"].fn(
+            task_ids=["dbid_001"], delete_data=True
+        )
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_pause_download_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.pause_download"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["pause_download"].fn(task_ids=["dbid_001"])
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_resume_download_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.resume_download"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["resume_download"].fn(task_ids=["dbid_001"])
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_edit_download_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.edit_download"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["edit_download"].fn(
+            task_ids=["dbid_001"], destination="downloads"
+        )
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_set_download_config_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.config.set_download_config"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["set_download_config"].fn(bt_max_download=100)
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_set_schedule_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.config.set_schedule"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["set_schedule"].fn(enabled=True)
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
