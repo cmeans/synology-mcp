@@ -16,6 +16,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
+    format_speed,
     format_task_status,
     format_transfer_progress,
 )
@@ -26,12 +27,6 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 _VALID_STATUS_FILTERS: set[str] = {"all", *STATUS_GROUPS.keys()}
-
-
-def _format_speed(bytes_per_sec: int) -> str:
-    if bytes_per_sec <= 0:
-        return "—"
-    return f"{format_size(bytes_per_sec)}/s"
 
 
 def _format_eta(downloaded: int, total: int, speed: int) -> str:
@@ -119,7 +114,7 @@ async def list_downloads(
         size_down = int(transfer.get("size_downloaded", 0))
         speed_down = int(transfer.get("speed_download", 0))
         progress = format_transfer_progress(size_down, size_total)
-        speed = _format_speed(speed_down)
+        speed = format_speed(speed_down)
         eta = _format_eta(size_down, size_total, speed_down)
         rows.append(
             [
@@ -217,8 +212,8 @@ async def get_download_info(
         transfer_pairs = [
             ("Downloaded", format_transfer_progress(size_down, size_total)),
             ("Uploaded", format_size(size_up)),
-            ("Speed (down)", _format_speed(int(transfer.get("speed_download", 0)))),
-            ("Speed (up)", _format_speed(int(transfer.get("speed_upload", 0)))),
+            ("Speed (down)", format_speed(int(transfer.get("speed_download", 0)))),
+            ("Speed (up)", format_speed(int(transfer.get("speed_upload", 0)))),
         ]
         sections.append(format_key_value(transfer_pairs, title="Transfer"))
 
@@ -270,8 +265,8 @@ async def get_download_info(
                 p.get("address", "—"),
                 p.get("agent", "—"),
                 f"{int(float(p.get('progress', 0)) * 100)}%",
-                _format_speed(int(p.get("speed_download", 0))),
-                _format_speed(int(p.get("speed_upload", 0))),
+                format_speed(int(p.get("speed_download", 0))),
+                format_speed(int(p.get("speed_upload", 0))),
             ]
             for p in peers
         ]

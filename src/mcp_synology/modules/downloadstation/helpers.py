@@ -57,6 +57,13 @@ def format_transfer_progress(downloaded: int, total: int) -> str:
     return f"{down_str} / {total_str} ({pct}%)"
 
 
+def format_speed(bytes_per_sec: int) -> str:
+    """Render a B/s rate; non-positive values display as an em dash."""
+    if bytes_per_sec <= 0:
+        return "—"
+    return f"{format_size(bytes_per_sec)}/s"
+
+
 _DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 # Per DSM convention: 7 days × 24 hours. Each char encodes one hour.

@@ -8,20 +8,14 @@ from typing import TYPE_CHECKING
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
     format_key_value,
-    format_size,
     synology_error_response,
 )
+from mcp_synology.modules.downloadstation.helpers import format_speed
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
-
-
-def _speed_str(bytes_per_sec: int) -> str:
-    if bytes_per_sec <= 0:
-        return "—"
-    return f"{format_size(bytes_per_sec)}/s"
 
 
 async def get_download_stats(client: DsmClient) -> str:
@@ -39,8 +33,8 @@ async def get_download_stats(client: DsmClient) -> str:
     speed_up = int(data.get("speed_upload", 0))
 
     pairs: list[tuple[str, str]] = [
-        ("Download (total)", _speed_str(speed_down)),
-        ("Upload (total)", _speed_str(speed_up)),
+        ("Download (total)", format_speed(speed_down)),
+        ("Upload (total)", format_speed(speed_up)),
     ]
 
     # eMule fields are only present when the eMule service is enabled. Use
@@ -49,7 +43,7 @@ async def get_download_stats(client: DsmClient) -> str:
     emule_down = data.get("emule_speed_download")
     emule_up = data.get("emule_speed_upload")
     if emule_down is not None or emule_up is not None:
-        pairs.append(("Download (eMule)", _speed_str(int(emule_down or 0))))
-        pairs.append(("Upload (eMule)", _speed_str(int(emule_up or 0))))
+        pairs.append(("Download (eMule)", format_speed(int(emule_down or 0))))
+        pairs.append(("Upload (eMule)", format_speed(int(emule_up or 0))))
 
     return format_key_value(pairs, title="Download Station throughput")
