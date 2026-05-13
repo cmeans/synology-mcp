@@ -426,6 +426,121 @@ class DsmClient:
 
         raise error_from_code(code, api)
 
+    async def create_download_task_with_file(
+        self,
+        file_path: Path,
+        filename: str,
+        *,
+        uri: str | None = None,
+        destination: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        timeout: float = 300.0,
+        _is_retry: bool = False,
+    ) -> dict[str, Any]:
+        """Create a Download Station task by uploading a .torrent or .nzb file.
+
+        Multipart POST against SYNO.DownloadStation.Task.create v1. Modeled on
+        ``upload()`` — same re-auth-on-session-error retry semantics, same
+        debug logging with ``_sid`` masked. Returns the ``data`` dict from the
+        DSM response (typically ``{"task_id": "..."}`` or ``{}``).
+        """
+        api = "SYNO.DownloadStation.Task"
+        http = self._get_http()
+
+        if api not in self._api_cache:
+            from mcp_synology.core.errors import ApiNotFoundError
+
+            raise ApiNotFoundError(
+                f"API '{api}' not found. Call query_api_info() first.",
+                code=102,
+            )
+
+        info = self._api_cache[api]
+        # DS Task.create pins to v1 — no v2 multipart path documented.
+        resolved_version = 1
+        url = f"{self._base_url}/webapi/{info.path}"
+
+        form_data: dict[str, str] = {
+            "api": api,
+            "version": str(resolved_version),
+            "method": "create",
+        }
+        if uri is not None:
+            form_data["uri"] = uri
+        if destination is not None:
+            form_data["destination"] = destination
+        if username is not None:
+            form_data["username"] = username
+        if password is not None:
+            form_data["password"] = password
+
+        # SID must be a query parameter, not a form field — same pattern as
+        # the FileStation Upload API.
+        query_params: dict[str, str] = {}
+        if self._sid:
+            query_params["_sid"] = self._sid
+
+        _sensitive = frozenset({"_sid", "password"})
+        log_data = {
+            k: ("***" if k in _sensitive else v) for k, v in {**form_data, **query_params}.items()
+        }
+        retry_tag = " (retry)" if _is_retry else ""
+        logger.debug(
+            "DSM POST%s: %s/create v%d — %s, file=%s",
+            retry_tag,
+            api,
+            resolved_version,
+            log_data,
+            filename,
+        )
+
+        def _open_file() -> BinaryIO:
+            return open(file_path, "rb")  # noqa: SIM115
+
+        fh = _open_file()
+        try:
+            resp = await http.post(
+                url,
+                params=query_params,
+                data=form_data,
+                files={"file": (filename, fh, "application/octet-stream")},
+                timeout=httpx.Timeout(timeout),
+            )
+        finally:
+            fh.close()
+
+        resp.raise_for_status()
+        body = resp.json()
+
+        if body.get("success"):
+            logger.debug("DSM response: %s/create — success", api)
+            data: dict[str, Any] = body.get("data", {})
+            return data
+
+        code = body.get("error", {}).get("code", 0)
+        logger.debug("DSM response: %s/create — error code %d", api, code)
+
+        # Re-auth on session errors (file must be re-opened on retry)
+        if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
+            logger.info("Session error %d on %s/create, attempting re-auth.", code, api)
+            try:
+                await self._re_auth_callback()
+            except SynologyError:
+                raise error_from_code(code, api) from None
+            return await self.create_download_task_with_file(
+                file_path,
+                filename,
+                uri=uri,
+                destination=destination,
+                username=username,
+                password=password,
+                timeout=timeout,
+                _is_retry=True,
+            )
+
+        raise error_from_code(code, api)
+
     async def download(
         self,
         path: str,

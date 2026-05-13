@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 import pytest
 import respx
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from mcp_synology.core.client import DsmClient
 from mcp_synology.core.errors import (
@@ -13,7 +18,7 @@ from mcp_synology.core.errors import (
     SessionExpiredError,
     SynologyError,
 )
-from tests.conftest import BASE_URL, make_client, make_minimal_api_cache
+from tests.conftest import BASE_URL, make_api_cache, make_client, make_minimal_api_cache
 
 # Local aliases so the existing test bodies don't need a wholesale rename.
 _make_client = make_client
@@ -186,3 +191,77 @@ class TestEscapePathParam:
     def test_backslash_in_path(self) -> None:
         result = DsmClient.escape_path_param(["/video/path\\file"])
         assert result == "/video/path\\\\file"
+
+
+class TestCreateDownloadTaskWithFile:
+    """Multipart-upload form of SYNO.DownloadStation.Task.create."""
+
+    @respx.mock
+    async def test_uploads_torrent_and_returns_data(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "ubuntu.torrent"
+        torrent.write_bytes(b"d4:infod6:lengthi100eee")
+
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"task_id": "dbid_new_001"}},
+        )
+
+        async with client:
+            result = await client.create_download_task_with_file(
+                file_path=torrent,
+                filename="ubuntu.torrent",
+                destination="downloads",
+            )
+            assert result == {"task_id": "dbid_new_001"}
+
+    @respx.mock
+    async def test_dsm_error_raises_typed_exception(self, tmp_path: Path) -> None:
+        from mcp_synology.core.downloadstation_errors import DownloadStationError
+
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "bad.torrent"
+        torrent.write_bytes(b"not a torrent")
+
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 400}},
+        )
+
+        async with client:
+            try:
+                await client.create_download_task_with_file(
+                    file_path=torrent,
+                    filename="bad.torrent",
+                )
+            except DownloadStationError as e:
+                assert "upload" in str(e).lower()
+            else:
+                raise AssertionError("expected DownloadStationError on code 400")
+
+    @respx.mock
+    async def test_session_error_triggers_one_reauth_retry(self, tmp_path: Path) -> None:
+        client = make_client(make_api_cache())
+        torrent = tmp_path / "fine.torrent"
+        torrent.write_bytes(b"d4:infod6:lengthi100eee")
+
+        reauth_count = 0
+
+        async def fake_reauth() -> None:
+            nonlocal reauth_count
+            reauth_count += 1
+            client._sid = "new_sid"  # noqa: SLF001 — test injection
+
+        client._re_auth_callback = fake_reauth  # noqa: SLF001
+
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=[
+                httpx.Response(200, json={"success": False, "error": {"code": 106}}),
+                httpx.Response(200, json={"success": True, "data": {"task_id": "dbid_002"}}),
+            ]
+        )
+
+        async with client:
+            result = await client.create_download_task_with_file(
+                file_path=torrent, filename="fine.torrent"
+            )
+            assert result == {"task_id": "dbid_002"}
+            assert reauth_count == 1
