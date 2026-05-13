@@ -138,3 +138,58 @@ class TestGetDownloadConfig:
             assert "105" in str(e) or "permission" in str(e).lower()
         else:
             raise AssertionError("expected ToolError")
+
+
+class TestGetScheduleNonStringPlan:
+    """Covers the schedule_plan-is-not-a-string branch (a real DSM oddity to
+    defend against — the API spec says string but a malformed firmware could
+    return None or a number).
+    """
+
+    @respx.mock
+    async def test_non_string_schedule_plan_raises_tool_error(self, mock_client: DsmClient) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        from mcp_synology.modules.downloadstation.config import get_schedule
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "enabled": True,
+                    "emule_enabled": False,
+                    "schedule_plan": 12345,  # non-string — invariant violation
+                },
+            }
+        )
+        try:
+            await get_schedule(mock_client)
+        except ToolError as e:
+            assert "schedule_plan" in str(e) or "not a string" in str(e)
+        else:
+            raise AssertionError("expected ToolError on non-string schedule_plan")
+
+
+class TestGetDownloadConfigBoolNone:
+    """Covers _bool_str(None) — when DSM omits a bool field (older firmware
+    may omit unzip_service_enabled / emule_enabled), the field should render
+    as an em dash rather than 'no' or crashing.
+    """
+
+    @respx.mock
+    async def test_missing_emule_enabled_renders_em_dash(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": True,
+                "data": {
+                    "bt_max_download": 0,
+                    "bt_max_upload": 0,
+                    # emule_enabled deliberately absent
+                    "default_destination": "downloads",
+                    # unzip_service_enabled deliberately absent
+                },
+            }
+        )
+        result = await get_download_config(mock_client)
+        # _bool_str(None) returns "—"
+        assert "—" in result

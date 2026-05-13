@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from mcp_synology.modules.downloadstation.helpers import (
+    format_eta,
+    format_speed,
     format_task_status,
     format_transfer_progress,
 )
@@ -90,3 +92,51 @@ class TestFormatTransferProgress:
     def test_total_smaller_than_downloaded_clamps_to_100(self) -> None:
         out = format_transfer_progress(downloaded=2000, total=1000)
         assert "(100%)" in out
+
+
+class TestFormatSpeed:
+    def test_zero_renders_em_dash(self) -> None:
+        assert format_speed(0) == "—"
+
+    def test_negative_renders_em_dash(self) -> None:
+        assert format_speed(-100) == "—"
+
+    def test_positive_renders_size_per_sec(self) -> None:
+        out = format_speed(1024 * 1024)
+        assert "/s" in out
+        assert "1" in out  # 1 MB rendered as "1 MB" by format_size
+
+
+class TestFormatEta:
+    def test_zero_speed_returns_em_dash(self) -> None:
+        assert format_eta(downloaded=0, total=1000, speed=0) == "—"
+
+    def test_negative_speed_returns_em_dash(self) -> None:
+        assert format_eta(downloaded=0, total=1000, speed=-5) == "—"
+
+    def test_downloaded_equals_total_returns_em_dash(self) -> None:
+        assert format_eta(downloaded=1000, total=1000, speed=10) == "—"
+
+    def test_downloaded_exceeds_total_returns_em_dash(self) -> None:
+        # DSM occasionally over-reports during seed-after-finish; should not negative ETA
+        assert format_eta(downloaded=2000, total=1000, speed=10) == "—"
+
+    def test_under_one_minute_renders_seconds(self) -> None:
+        # 30 bytes remaining at 1 B/s → 30s
+        assert format_eta(downloaded=0, total=30, speed=1) == "30s"
+
+    def test_under_one_hour_renders_minutes(self) -> None:
+        # 600 bytes remaining at 1 B/s → 600s → 10m
+        assert format_eta(downloaded=0, total=600, speed=1) == "10m"
+
+    def test_under_one_day_renders_hours_minutes(self) -> None:
+        # 7200s = 2h0m
+        assert format_eta(downloaded=0, total=7200, speed=1) == "2h0m"
+        # 7320s = 2h2m
+        assert format_eta(downloaded=0, total=7320, speed=1) == "2h2m"
+
+    def test_one_day_or_more_renders_days_hours(self) -> None:
+        # 86400s = exactly 1 day → 1d0h
+        assert format_eta(downloaded=0, total=86400, speed=1) == "1d0h"
+        # 90000s = 1d1h
+        assert format_eta(downloaded=0, total=90000, speed=1) == "1d1h"

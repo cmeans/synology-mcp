@@ -75,3 +75,65 @@ class TestDownloadstationModuleRegister:
         registered = set(server._tool_manager._tools.keys())
         expected = {t.name for t in MODULE_INFO.tools}
         assert registered == expected
+
+
+class TestDownloadstationToolInvocation:
+    """Invoke each registered tool to walk the closure body lines.
+
+    Mirrors tests/modules/filestation/test_register.py::TestFilestationToolInvocation.
+    The downloadstation register() body has one closure per tool; without this
+    coverage the closures sit at the bottom of __init__.py untested even after
+    integration tests confirm registration succeeds.
+    """
+
+    @staticmethod
+    def _capture_call(monkeypatch, target: str) -> AsyncMock:
+        mock = AsyncMock(return_value=f"<<{target}-result>>")
+        monkeypatch.setattr(target, mock)
+        return mock
+
+    async def test_list_downloads_invocation(self, monkeypatch) -> None:
+        server, manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.list_downloads"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["list_downloads"].fn()
+        assert result == f"<<{target}-result>>"
+        manager.get_client.assert_awaited()
+        mock.assert_awaited_once()
+
+    async def test_get_download_info_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.tasks.get_download_info"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["get_download_info"].fn(task_id="dbid_001")
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_get_download_stats_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.stats.get_download_stats"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["get_download_stats"].fn()
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_get_download_config_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.config.get_download_config"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["get_download_config"].fn()
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()
+
+    async def test_get_schedule_invocation(self, monkeypatch) -> None:
+        server, _manager, ctx = _make_ctx()
+        target = "mcp_synology.modules.downloadstation.config.get_schedule"
+        mock = self._capture_call(monkeypatch, target)
+        register(ctx)
+        result = await server._tool_manager._tools["get_schedule"].fn()
+        assert result == f"<<{target}-result>>"
+        mock.assert_awaited_once()

@@ -64,6 +64,31 @@ def format_speed(bytes_per_sec: int) -> str:
     return f"{format_size(bytes_per_sec)}/s"
 
 
+def format_eta(downloaded: int, total: int, speed: int) -> str:
+    """Render an estimated time-to-completion string.
+
+    Returns an em dash when the ETA is undefined (zero/negative speed, or
+    downloaded already at-or-past total — including DSM's occasional
+    seed-after-finish overshoot). Otherwise renders one of:
+
+    - ``Ns`` for under one minute
+    - ``Nm`` for under one hour
+    - ``NhMm`` for under one day
+    - ``NdMh`` for one day or more
+    """
+    if speed <= 0 or total <= downloaded:
+        return "—"
+    remaining = total - downloaded
+    seconds = remaining // speed
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600}h"
+
+
 _DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 # Per DSM convention: 7 days × 24 hours. Each char encodes one hour.

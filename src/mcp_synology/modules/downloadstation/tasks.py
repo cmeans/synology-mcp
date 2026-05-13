@@ -16,6 +16,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.downloadstation.helpers import (
     STATUS_GROUPS,
+    format_eta,
     format_speed,
     format_task_status,
     format_transfer_progress,
@@ -27,20 +28,6 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 _VALID_STATUS_FILTERS: set[str] = {"all", *STATUS_GROUPS.keys()}
-
-
-def _format_eta(downloaded: int, total: int, speed: int) -> str:
-    if speed <= 0 or total <= downloaded:
-        return "—"
-    remaining = total - downloaded
-    seconds = remaining // speed
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
-    return f"{seconds // 86400}d{(seconds % 86400) // 3600}h"
 
 
 def _format_epoch(epoch: int | None) -> str:
@@ -115,7 +102,7 @@ async def list_downloads(
         speed_down = int(transfer.get("speed_download", 0))
         progress = format_transfer_progress(size_down, size_total)
         speed = format_speed(speed_down)
-        eta = _format_eta(size_down, size_total, speed_down)
+        eta = format_eta(size_down, size_total, speed_down)
         rows.append(
             [
                 task_id,
