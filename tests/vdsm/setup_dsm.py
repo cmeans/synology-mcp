@@ -755,13 +755,21 @@ def _configure_download_station_via_api(
 
         try:
             # 1. Set DS default destination
+            # DSM 7.2.2 DS Info API only dispatches via /webapi/DownloadStation/info.cgi,
+            # NOT the generic /webapi/entry.cgi (which returns error 102 for ALL
+            # DS API calls). The method name is `setserverconfig`, NOT the
+            # `setconfig` published in some older DSM API docs — `setconfig`
+            # returns error 103 (method does not exist). Discovered by probing
+            # local vdsm 7.2.2 with both endpoints x [setconfig/setserverconfig/
+            # set/config/update] x [v1/v2]; only setserverconfig at
+            # info.cgi succeeded.
             print(f"    Setting DS default_destination = {default_destination}")
             setconfig_resp = client.get(
-                "/webapi/entry.cgi",
+                "/webapi/DownloadStation/info.cgi",
                 params={
                     "api": "SYNO.DownloadStation.Info",
                     "version": "1",
-                    "method": "setconfig",
+                    "method": "setserverconfig",
                     "default_destination": default_destination,
                     "_sid": sid,
                 },
@@ -769,7 +777,7 @@ def _configure_download_station_via_api(
             setconfig_data = setconfig_resp.json()
             if not setconfig_data.get("success"):
                 err = setconfig_data.get("error", {}).get("code", "?")
-                msg = f"DS setconfig failed: code {err}"
+                msg = f"DS setserverconfig failed: code {err}"
                 raise RuntimeError(msg)
 
             # 2. Grant test_user permission for DS
