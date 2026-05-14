@@ -667,26 +667,71 @@ def _install_download_station_via_ui(
     if tos_visible:
         print("    Detected Package Center Terms of Service modal; accepting...")
         _screenshot(page, "ds-02a-tos-shown")
-        # Check the agreement checkbox (DSM puts it just above the OK button)
-        page.evaluate(
+        # DSM 7's ExtJS UI doesn't render checkboxes as real <input type=checkbox>
+        # elements — there's a styled <div> wrapper with the native input hidden.
+        # The reliable way to toggle the checkbox is to click its LABEL text.
+        label_clicked = page.evaluate(
             """() => {
-                const cbs = [...document.querySelectorAll('input[type=checkbox]')];
-                const visible = cbs.find(cb => cb.offsetParent !== null && !cb.checked);
-                if (visible) { visible.click(); return true; }
+                const els = [...document.querySelectorAll('label, span, div, td')];
+                // Use substring match — DSM wording varies slightly (with/without
+                // trailing period, "Service" vs "Services", etc.)
+                const el = els.find(
+                    e => e.textContent
+                         && e.textContent.includes('I have read and agreed')
+                         && e.offsetParent !== null
+                );
+                if (el) { el.click(); return true; }
                 return false;
             }"""
         )
+        if label_clicked:
+            print("    Ticked ToS agreement checkbox")
+        else:
+            print("    WARNING: could not find ToS agreement checkbox label")
         time.sleep(1)
         _screenshot(page, "ds-02b-tos-checked")
-        # Click the primary action button (label varies: OK / Apply / Agree / Accept)
-        ok_btn = page.query_selector(
-            "button:has-text('OK'), button:has-text('Apply'), "
-            "button:has-text('Agree'), button:has-text('Accept')"
-        )
-        if ok_btn and ok_btn.is_visible():
-            ok_btn.click(force=True)
-            time.sleep(3)
+
+        # Click the primary action button using the project's _click_text
+        # helper — it walks a/button/span/div/p/label and is ExtJS-aware
+        # (ExtJS buttons render their text inside <span class="x-btn-inner">).
+        # Generic Playwright button:has-text() doesn't match ExtJS button
+        # structure reliably; _click_text does.
+        button_clicked = False
+        for label in ("OK", "Apply", "Agree", "Accept", "Submit"):
+            if _click_text(page, label, timeout=2):
+                print(f"    Clicked '{label}' on ToS modal")
+                button_clicked = True
+                break
+        if not button_clicked:
+            _screenshot(page, "ds-02c-tos-button-missing")
+            msg = (
+                "Ticked ToS checkbox but could not find primary action button "
+                "(OK/Apply/Agree/Accept/Submit) — DSM UI may have changed."
+            )
+            raise RuntimeError(msg)
+        time.sleep(3)
         _screenshot(page, "ds-02c-tos-accepted")
+
+        # Defensive: confirm the modal actually went away before continuing.
+        # If the click didn't dismiss it (disabled OK button because the
+        # checkbox tick didn't register), we'd otherwise loop right back into
+        # the same 5-minute install poll.
+        still_present = page.evaluate(
+            """() => {
+                return [...document.querySelectorAll('div, span, h1, h2')].some(
+                    el => el.textContent
+                          && el.textContent.includes('Terms of Service')
+                          && el.offsetParent !== null
+                );
+            }"""
+        )
+        if still_present:
+            _screenshot(page, "ds-02d-tos-still-shown")
+            msg = (
+                "Clicked ToS action button but the modal is still visible. "
+                "Checkbox tick may not have registered, or OK button is still disabled."
+            )
+            raise RuntimeError(msg)
     else:
         print("    No Terms of Service modal — proceeding directly")
 
