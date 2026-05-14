@@ -577,6 +577,117 @@ def _verify_setup_via_api(base_url: str, username: str, password: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Download Station install via Package Center UI
+# ---------------------------------------------------------------------------
+
+
+def _install_download_station_via_ui(
+    page: Any,
+    install_timeout_sec: int = 300,
+) -> None:
+    """Install the Download Station package via DSM Package Center UI.
+
+    Required at golden-image bake time because:
+    - The vdsm base image doesn't ship Download Station
+    - Test cases in tests/vdsm/test_vdsm_downloadstation.py need DS installed
+      to register tools against the live API
+
+    Operator flow (mirrored here):
+      1. Click Package Center desktop shortcut (or open via Main Menu)
+      2. Search "Download Station"
+      3. Click Install on the search result
+      4. Accept any license / permission dialog
+      5. Wait for "Installed" state (can take 1-3 minutes; download is fetched
+         from Synology's package server, so this step requires outbound HTTP)
+
+    install_timeout_sec defaults to 300 (5 min) because cold-cache installs
+    can be slow on CI runners. Bake-time only — subsequent test runs restore
+    from the golden image.
+    """
+    print("    Opening Package Center...")
+    _screenshot(page, "ds-01-before-package-center")
+
+    # Open Package Center. DSM 7's Main Menu lives at the top-left; clicking
+    # the menu icon then the "Package Center" tile is the operator path.
+    # If a desktop shortcut for Package Center exists, prefer it (fewer steps).
+    pkg_shortcut = page.query_selector("text='Package Center'")
+    if pkg_shortcut and pkg_shortcut.is_visible():
+        pkg_shortcut.click(force=True)
+    else:
+        # Fall back to Main Menu
+        page.locator(".sds-mainmenu-btn, [data-qa='main-menu']").first.click(force=True)
+        time.sleep(1)
+        page.locator("text='Package Center'").first.click(force=True)
+    time.sleep(5)
+    _screenshot(page, "ds-02-package-center-open")
+
+    # Search for Download Station
+    print("    Searching for Download Station...")
+    search_input = page.locator("input[placeholder*='Search'], input[aria-label*='Search']").first
+    search_input.click(force=True)
+    search_input.type("Download Station", delay=50)
+    time.sleep(3)
+    _screenshot(page, "ds-03-search-results")
+
+    # Click Install on the Download Station card. The button label is "Install"
+    # for not-yet-installed packages; if the bake re-runs on an image that
+    # already has DS, we'll see "Open" or "Run" instead — short-circuit.
+    install_btn = page.query_selector("button:has-text('Install')")
+    if not install_btn or not install_btn.is_visible():
+        # Already installed — nothing to do.
+        already = page.query_selector("button:has-text('Open'), button:has-text('Run')")
+        if already and already.is_visible():
+            print("    Download Station already installed — skipping install")
+            _screenshot(page, "ds-04-already-installed")
+            return
+        # Neither Install nor Open visible — something's wrong.
+        _screenshot(page, "ds-04-install-button-missing")
+        msg = "Could not find Install button or installed marker for Download Station"
+        raise RuntimeError(msg)
+
+    install_btn.click(force=True)
+    time.sleep(3)
+    _screenshot(page, "ds-05-install-clicked")
+
+    # Accept any license / configuration wizard dialogs. DSM 7's Package Center
+    # may show: (a) volume selection if multiple volumes exist (vdsm has one),
+    # (b) license agreement, (c) confirmation dialog. Walk through them by
+    # clicking the primary action button repeatedly until we see "Apply" / "Done"
+    # or the progress indicator appears.
+    for step in range(6):
+        time.sleep(2)
+        next_btn = page.query_selector(
+            "button:has-text('Next'), button:has-text('Agree'), "
+            "button:has-text('Apply'), button:has-text('Done'), "
+            "button:has-text('Continue')"
+        )
+        if next_btn and next_btn.is_visible():
+            next_btn.click(force=True)
+            _screenshot(page, f"ds-06-dialog-step-{step}")
+        else:
+            break
+
+    # Wait for installation to complete. Poll for the "Installed" status or
+    # the "Run"/"Open" button (which indicates the package is installed and
+    # available).
+    print(f"    Waiting for Download Station install to complete (up to {install_timeout_sec}s)...")
+    deadline = time.time() + install_timeout_sec
+    while time.time() < deadline:
+        time.sleep(5)
+        installed = page.query_selector(
+            "button:has-text('Open'), button:has-text('Run'), text='Installed'"
+        )
+        if installed and installed.is_visible():
+            print("    Download Station installed successfully")
+            _screenshot(page, "ds-07-install-complete")
+            return
+
+    _screenshot(page, "ds-07-install-timeout")
+    msg = f"Download Station install did not complete within {install_timeout_sec}s"
+    raise TimeoutError(msg)
+
+
+# ---------------------------------------------------------------------------
 # Main setup entry point
 # ---------------------------------------------------------------------------
 
@@ -611,12 +722,15 @@ def setup_dsm_for_testing(
         page = browser.new_page(viewport={"width": 1280, "height": 900})
 
         try:
-            print("\n  [1/4] Logging in to DSM...")
+            print("\n  [1/5] Logging in to DSM...")
             _dsm_login(page, base_url, admin_user, admin_password)
 
-            print("\n  [2/4] Creating test user...")
+            print("\n  [2/5] Creating test user...")
             _open_control_panel(page)
             _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
+
+            print("\n  [3/5] Installing Download Station via Package Center...")
+            _install_download_station_via_ui(page)
 
         except Exception:
             _screenshot(page, "error-state")
@@ -626,10 +740,10 @@ def setup_dsm_for_testing(
 
     # 2. Enable SSH and create shared folders via synoshare in the DSM guest
     if ssh_port:
-        print("\n  [3/4] Enabling SSH...")
+        print("\n  [4/5] Enabling SSH...")
         _enable_ssh(base_url, admin_user, admin_password)
 
-        print("\n  [4/4] Creating shared folders and test data via SSH...")
+        print("\n  [5/5] Creating shared folders and test data via SSH...")
         _create_shared_folders_via_ssh(
             ssh_host,
             ssh_port,
@@ -637,7 +751,7 @@ def setup_dsm_for_testing(
             DEFAULT_TEST_USER,
         )
     else:
-        print("\n  [3/4] No SSH port — skipping share creation")
+        print("\n  [4/5] No SSH port — skipping share creation")
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
@@ -653,6 +767,7 @@ def setup_dsm_for_testing(
         "admin_password": admin_password,
         "test_user": DEFAULT_TEST_USER,
         "test_password": DEFAULT_TEST_PASSWORD,
+        "dsm_packages": ["DownloadStation"],
         "test_paths": {
             "existing_share": "/testshare",
             "search_folder": "/testshare/Documents",
