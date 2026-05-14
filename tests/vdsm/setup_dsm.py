@@ -650,6 +650,46 @@ def _install_download_station_via_ui(
     time.sleep(10)
     _screenshot(page, "ds-02-package-center-open")
 
+    # DSM 7 Package Center shows a Terms of Service modal on first launch
+    # that blocks everything underneath. Earlier CI iterations clicked
+    # through to the search results and Install button visually, but the
+    # clicks were all eaten by the modal's overlay — the install never
+    # actually started. Detect the ToS, check the agreement box, click
+    # OK/Apply to close it.
+    tos_visible = page.evaluate(
+        """() => {
+            return [...document.querySelectorAll('div, span, h1, h2')].some(
+                el => el.textContent && el.textContent.includes('Terms of Service')
+                      && el.offsetParent !== null
+            );
+        }"""
+    )
+    if tos_visible:
+        print("    Detected Package Center Terms of Service modal; accepting...")
+        _screenshot(page, "ds-02a-tos-shown")
+        # Check the agreement checkbox (DSM puts it just above the OK button)
+        page.evaluate(
+            """() => {
+                const cbs = [...document.querySelectorAll('input[type=checkbox]')];
+                const visible = cbs.find(cb => cb.offsetParent !== null && !cb.checked);
+                if (visible) { visible.click(); return true; }
+                return false;
+            }"""
+        )
+        time.sleep(1)
+        _screenshot(page, "ds-02b-tos-checked")
+        # Click the primary action button (label varies: OK / Apply / Agree / Accept)
+        ok_btn = page.query_selector(
+            "button:has-text('OK'), button:has-text('Apply'), "
+            "button:has-text('Agree'), button:has-text('Accept')"
+        )
+        if ok_btn and ok_btn.is_visible():
+            ok_btn.click(force=True)
+            time.sleep(3)
+        _screenshot(page, "ds-02c-tos-accepted")
+    else:
+        print("    No Terms of Service modal — proceeding directly")
+
     # Search for Download Station
     print("    Searching for Download Station...")
     search_input = page.locator("input[placeholder*='Search'], input[aria-label*='Search']").first
