@@ -688,6 +688,116 @@ def _install_download_station_via_ui(
 
 
 # ---------------------------------------------------------------------------
+# Download Station configuration via API
+# ---------------------------------------------------------------------------
+
+
+def _configure_download_station_via_api(
+    base_url: str,
+    admin_user: str,
+    admin_password: str,
+    test_user: str,
+    default_destination: str = "writable",
+) -> None:
+    """Configure Download Station after install: default destination + permissions.
+
+    Runs once at golden-image bake time. Uses DSM admin session to:
+      1. Set DS default destination to an existing share
+      2. Grant the test_user permission to use DS (via the DSM
+         Application Privileges system)
+
+    All calls go through the DSM web API (login -> admin session -> operation).
+    The permission-grant API name may differ across DSM versions; a failure
+    on that call logs a warning rather than failing the bake — test failures
+    from a 105 on DS calls will surface the gap clearly in CI logs.
+    """
+    print("    Configuring Download Station (admin session)...")
+
+    with httpx.Client(base_url=base_url, timeout=30, verify=False) as client:  # noqa: S501
+        # Admin login
+        login_resp = client.get(
+            "/webapi/auth.cgi",
+            params={
+                "api": "SYNO.API.Auth",
+                "version": "3",
+                "method": "login",
+                "account": admin_user,
+                "passwd": admin_password,
+                "session": "DownloadStation",
+                "format": "cookie",
+            },
+        )
+        login_data = login_resp.json()
+        if not login_data.get("success"):
+            msg = f"Admin login failed: {login_data.get('error')}"
+            raise RuntimeError(msg)
+        sid = login_data["data"]["sid"]
+
+        try:
+            # 1. Set DS default destination
+            print(f"    Setting DS default_destination = {default_destination}")
+            setconfig_resp = client.get(
+                "/webapi/entry.cgi",
+                params={
+                    "api": "SYNO.DownloadStation.Info",
+                    "version": "1",
+                    "method": "setconfig",
+                    "default_destination": default_destination,
+                    "_sid": sid,
+                },
+            )
+            setconfig_data = setconfig_resp.json()
+            if not setconfig_data.get("success"):
+                err = setconfig_data.get("error", {}).get("code", "?")
+                msg = f"DS setconfig failed: code {err}"
+                raise RuntimeError(msg)
+
+            # 2. Grant test_user permission for DS
+            # DSM uses SYNO.Core.Package.Setting.User to manage per-user package
+            # access. The exact API call shape varies by DSM version — use the
+            # most widely supported form. If this returns 105/403 (no permission
+            # via API on vdsm — the SYNO.Core.* surface is restricted on
+            # virtual-dsm), don't fail the bake; log a warning. A test failure
+            # with code 105 on DS calls will surface the missing permission
+            # clearly enough that the operator can fall back to a UI grant.
+            print(f"    Granting {test_user} permission for DownloadStation...")
+            perm_resp = client.get(
+                "/webapi/entry.cgi",
+                params={
+                    "api": "SYNO.Core.Package.Setting.User",
+                    "version": "1",
+                    "method": "set",
+                    "package": "DownloadStation",
+                    "users": '[{"name":"' + test_user + '","allowed":true}]',
+                    "_sid": sid,
+                },
+            )
+            perm_data = perm_resp.json()
+            if not perm_data.get("success"):
+                code = perm_data.get("error", {}).get("code", "?")
+                logger.warning(
+                    "DS permission grant for %s returned code %s — test_user may "
+                    "lack DS access. May need manual UI grant.",
+                    test_user,
+                    code,
+                )
+        finally:
+            # Logout regardless of success
+            client.get(
+                "/webapi/auth.cgi",
+                params={
+                    "api": "SYNO.API.Auth",
+                    "version": "1",
+                    "method": "logout",
+                    "session": "DownloadStation",
+                    "_sid": sid,
+                },
+            )
+
+    print("    Download Station configured.")
+
+
+# ---------------------------------------------------------------------------
 # Main setup entry point
 # ---------------------------------------------------------------------------
 
@@ -722,14 +832,14 @@ def setup_dsm_for_testing(
         page = browser.new_page(viewport={"width": 1280, "height": 900})
 
         try:
-            print("\n  [1/5] Logging in to DSM...")
+            print("\n  [1/6] Logging in to DSM...")
             _dsm_login(page, base_url, admin_user, admin_password)
 
-            print("\n  [2/5] Creating test user...")
+            print("\n  [2/6] Creating test user...")
             _open_control_panel(page)
             _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
 
-            print("\n  [3/5] Installing Download Station via Package Center...")
+            print("\n  [3/6] Installing Download Station via Package Center...")
             _install_download_station_via_ui(page)
 
         except Exception:
@@ -740,18 +850,32 @@ def setup_dsm_for_testing(
 
     # 2. Enable SSH and create shared folders via synoshare in the DSM guest
     if ssh_port:
-        print("\n  [4/5] Enabling SSH...")
+        print("\n  [4/6] Enabling SSH...")
         _enable_ssh(base_url, admin_user, admin_password)
 
-        print("\n  [5/5] Creating shared folders and test data via SSH...")
+        print("\n  [5/6] Creating shared folders and test data via SSH...")
         _create_shared_folders_via_ssh(
             ssh_host,
             ssh_port,
             admin_password,
             DEFAULT_TEST_USER,
         )
+
+        print("\n  [6/6] Configuring Download Station...")
+        _configure_download_station_via_api(
+            base_url=base_url,
+            admin_user=admin_user,
+            admin_password=admin_password,
+            test_user=DEFAULT_TEST_USER,
+            default_destination="writable",
+        )
     else:
-        print("\n  [4/5] No SSH port — skipping share creation")
+        print("\n  [4/6] No SSH port — skipping share creation")
+        print(
+            "  [5/6] No SSH port — skipping DS configuration"
+            " (default destination needs an existing share)"
+        )
+        print("  [6/6] Skipped")
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
