@@ -696,15 +696,16 @@ def _install_download_station_via_ui(
         else:
             break
 
-    # Wait for installation to complete. Poll for the "Installed" status or
-    # the "Run"/"Open" button (which indicates the package is installed and
-    # available).
+    # Wait for installation to complete. Poll for the "Run" / "Open" button
+    # which replaces "Install" once the package is available. NOTE: do NOT
+    # mix Playwright's text= selector engine into a CSS list — that fails at
+    # parse time. :has-text() is CSS-compatible and sufficient here.
     print(f"    Waiting for Download Station install to complete (up to {install_timeout_sec}s)...")
     deadline = time.time() + install_timeout_sec
     while time.time() < deadline:
         time.sleep(5)
         installed = page.query_selector(
-            "button:has-text('Open'), button:has-text('Run'), text='Installed'"
+            "button:has-text('Open'), button:has-text('Run')"
         )
         if installed and installed.is_visible():
             print("    Download Station installed successfully")
