@@ -585,42 +585,62 @@ def _install_download_station_via_ssh(
     host: str,
     ssh_port: int,
     admin_password: str,
+    base_url: str,
     *,
     install_timeout_sec: int = 300,
 ) -> None:
     """Install Download Station via synopkg over SSH.
 
     Replaces the original Playwright/Package-Center UI flow, which proved
-    unreliable on Synology's heavily customized DSM 7 Package Center: the
-    Terms of Service modal uses a syno-ux checkbox rendered as an
-    <input type="button"> whose value is driven entirely by Ext 3.4.1's
-    component model, and no combination of JS .click(), CDP mouse events,
-    or scoped Playwright locators in 8 local iterations dismissed it.
-    The handoff plan flagged this fallback for the case "we burn 2-3
-    iterations without progress" — SSH bypasses the UI surface entirely
-    and uses the same `_ssh` helper proven for share creation.
+    unautomatable against Synology's heavily customized DSM 7 Package
+    Center (Ext 3.4.1 + syno-ux checkbox = no synthetic-click path
+    dismisses the ToS modal). SSH bypasses the UI entirely and reuses
+    the `_ssh` helper proven for share creation.
 
-    Idempotent: returns early if DownloadStation is already in
-    `synopkg list`'s output, so a re-run of the bake against a cached
-    image doesn't try to re-install.
+    Three-step start:
+      1. `synopkg install_from_server` to install (~3s)
+      2. `synopkg start` is a no-op on vDSM — systemd-unit lookup fails
+         with status_code 263 even though install succeeded
+      3. `/var/packages/DownloadStation/scripts/start-stop-status start`
+         runs the package's own SysV-style start script which actually
+         starts the DS services (synopkg/synosystemd is the misleading
+         layer; the package internals work fine)
+
+    Gate is the DSM API cache (SYNO.API.Info query for
+    SYNO.DownloadStation.Task), NOT `synopkg status` — the latter keeps
+    reporting stopped on vDSM regardless of actual service state.
+
+    Idempotent on cached golden images: returns early if the API is
+    already registered.
     """
 
     def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
         return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
 
-    # Idempotency check
-    rc, out = ssh("/usr/syno/bin/synopkg list --name DownloadStation", sudo=False)
-    if rc == 0 and "DownloadStation" in out:
-        print("    Download Station already installed")
+    def api_has_ds_task() -> bool:
+        """True if SYNO.DownloadStation.Task is registered in the API cache."""
+        try:
+            resp = httpx.get(
+                f"{base_url}/webapi/query.cgi",
+                params={
+                    "api": "SYNO.API.Info",
+                    "version": "1",
+                    "method": "query",
+                    "query": "SYNO.DownloadStation.Task",
+                },
+                timeout=10,
+                verify=False,  # noqa: S501
+            )
+            return bool(resp.json().get("data", {}).get("SYNO.DownloadStation.Task"))
+        except (httpx.HTTPError, ValueError):
+            return False
+
+    # Idempotency: a cached golden image rebuilt against an already-DS
+    # image will have the API registered already.
+    if api_has_ds_task():
+        print("    Download Station already running (API cache hit)")
         return
-    # Probe the binary location — synopkg lives under /usr/syno/bin on DSM
-    # but the SSH-default PATH may not include it.
-    rc, out = ssh("which synopkg || ls /usr/syno/bin/synopkg")
-    print(f"    synopkg location: rc={rc} out={out.strip()}")
-    # install_from_server downloads the .spk from packages.synology.com.
-    # This requires outbound HTTPS from the vdsm container — should work
-    # in CI; if not, we'll see a clear network error here instead of the
-    # silent UI-eaten-clicks failure mode.
+    # Install (~3s on a warm Synology package server, 30-60s on cold cache).
     print("    Running synopkg install_from_server DownloadStation...")
     start = time.monotonic()
     rc, out = ssh(
@@ -631,13 +651,44 @@ def _install_download_station_via_ssh(
     if rc != 0:
         msg = f"synopkg install_from_server failed after {elapsed}s (rc={rc}): {out.strip()}"
         raise RuntimeError(msg)
-    print(f"    synopkg install completed in {elapsed}s: {out.strip()[:200]}")
-    # Verify by listing again
+    print(f"    synopkg install completed in {elapsed}s")
+    # Verify install via the package list (cheap sanity check).
     rc, out = ssh("/usr/syno/bin/synopkg list --name DownloadStation", sudo=False)
     if "DownloadStation" not in out:
         msg = f"DownloadStation not in package list after install: {out.strip()[:200]}"
         raise RuntimeError(msg)
-    print("    Download Station installed and verified.")
+    # Run synopkg start (typically a no-op on vDSM but harmless on real DSM)
+    # then the package's own start script which actually starts the DS
+    # services on vDSM. start-stop-status emits benign warnings about
+    # python2 (eMule plugin only) and a missing amule statistics file —
+    # both are unrelated to the core download/list/edit task surface.
+    ssh("/usr/syno/bin/synopkg start DownloadStation", sudo=True)
+    rc, out = ssh(
+        "/var/packages/DownloadStation/scripts/start-stop-status start 2>&1",
+        sudo=True,
+    )
+    print(f"    start-stop-status start: rc={rc}")
+    if "active" not in out.lower() and "started" not in out.lower():
+        # No "active" marker — likely failed to start. Surface the output
+        # so we can debug; don't silently swallow.
+        print(f"    start-stop-status output:\n{out.strip()[:600]}")
+    # Poll the API for SYNO.DownloadStation.Task — this is the ACTUAL gate
+    # that _configure_download_station_via_api needs. synopkg status
+    # keeps reporting stopped on vDSM regardless of actual service state.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if api_has_ds_task():
+            print("    SYNO.DownloadStation.Task is registered in DSM API cache.")
+            break
+        time.sleep(3)
+    else:
+        msg = (
+            "SYNO.DownloadStation.Task did not appear in the DSM API cache "
+            "within 60s after install + start. Package services may not have "
+            "started — check /var/log/synopkg.log on the NAS."
+        )
+        raise RuntimeError(msg)
+    print("    Download Station installed, started, and API-verified.")
 
 
 # ---------------------------------------------------------------------------
@@ -808,7 +859,7 @@ def setup_dsm_for_testing(
         _enable_ssh(base_url, admin_user, admin_password)
 
         print("\n  [4/6] Installing Download Station via synopkg (SSH)...")
-        _install_download_station_via_ssh(ssh_host, ssh_port, admin_password)
+        _install_download_station_via_ssh(ssh_host, ssh_port, admin_password, base_url)
 
         print("\n  [5/6] Creating shared folders and test data via SSH...")
         _create_shared_folders_via_ssh(
