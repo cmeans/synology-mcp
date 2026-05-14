@@ -681,14 +681,20 @@ def _install_download_station_via_ui(
     # Accept any license / configuration wizard dialogs. DSM 7's Package Center
     # may show: (a) volume selection if multiple volumes exist (vdsm has one),
     # (b) license agreement, (c) confirmation dialog. Walk through them by
-    # clicking the primary action button repeatedly until we see "Apply" / "Done"
-    # or the progress indicator appears.
-    for step in range(6):
+    # clicking the primary action button repeatedly. Expanded button-label
+    # set after the first CI iteration timed out without seeing the Open/Run
+    # marker — the previous walker's labels (Next/Agree/Apply/Done/Continue)
+    # missed Confirm/OK/Yes/Install which DSM 7 uses on package-install
+    # confirmation dialogs.
+    time.sleep(3)  # Give the first dialog a moment to appear before polling
+    for step in range(10):
         time.sleep(2)
         next_btn = page.query_selector(
             "button:has-text('Next'), button:has-text('Agree'), "
             "button:has-text('Apply'), button:has-text('Done'), "
-            "button:has-text('Continue')"
+            "button:has-text('Continue'), button:has-text('Confirm'), "
+            "button:has-text('OK'), button:has-text('Yes'), "
+            "button:has-text('Install')"
         )
         if next_btn and next_btn.is_visible():
             next_btn.click(force=True)
@@ -702,15 +708,19 @@ def _install_download_station_via_ui(
     # parse time. :has-text() is CSS-compatible and sufficient here.
     print(f"    Waiting for Download Station install to complete (up to {install_timeout_sec}s)...")
     deadline = time.time() + install_timeout_sec
+    poll_iter = 0
     while time.time() < deadline:
         time.sleep(5)
-        installed = page.query_selector(
-            "button:has-text('Open'), button:has-text('Run')"
-        )
+        installed = page.query_selector("button:has-text('Open'), button:has-text('Run')")
         if installed and installed.is_visible():
             print("    Download Station installed successfully")
             _screenshot(page, "ds-07-install-complete")
             return
+        # Periodic screenshots during the wait so post-mortem diagnostics
+        # show install progress (or stall point) without needing local repro.
+        poll_iter += 1
+        if poll_iter % 12 == 0:  # every ~60s
+            _screenshot(page, f"ds-07-install-progress-{poll_iter * 5}s")
 
     _screenshot(page, "ds-07-install-timeout")
     msg = f"Download Station install did not complete within {install_timeout_sec}s"
