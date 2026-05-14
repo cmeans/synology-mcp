@@ -607,18 +607,47 @@ def _install_download_station_via_ui(
     print("    Opening Package Center...")
     _screenshot(page, "ds-01-before-package-center")
 
-    # Open Package Center. DSM 7's Main Menu lives at the top-left; clicking
-    # the menu icon then the "Package Center" tile is the operator path.
-    # If a desktop shortcut for Package Center exists, prefer it (fewer steps).
-    pkg_shortcut = page.query_selector("text='Package Center'")
-    if pkg_shortcut and pkg_shortcut.is_visible():
-        pkg_shortcut.click(force=True)
-    else:
-        # Fall back to Main Menu
-        page.locator(".sds-mainmenu-btn, [data-qa='main-menu']").first.click(force=True)
-        time.sleep(1)
-        page.locator("text='Package Center'").first.click(force=True)
-    time.sleep(5)
+    # Clear popups left over from prior steps (mirrors what _open_control_panel
+    # does). The user-creation step leaves Control Panel open in the foreground,
+    # which occluded the desktop in the first CI attempt — a desktop-shortcut
+    # search returned nothing, and the Main Menu fallback selector was wrong.
+    _dismiss_all_popups(page)
+
+    # Launch Package Center via DSM's internal AppLaunch API. This is the
+    # canonical mechanism DSM apps use to launch each other and works
+    # regardless of which window is currently in focus — no UI scraping, no
+    # taskbar selector. The internal app id for Package Center is
+    # SYNO.SDS.PkgManApp.Instance.
+    launched = page.evaluate("""() => {
+        try {
+            if (window.SYNO && window.SYNO.SDS && window.SYNO.SDS.AppLaunch) {
+                window.SYNO.SDS.AppLaunch('SYNO.SDS.PkgManApp.Instance');
+                return 'app_launch';
+            }
+        } catch (e) {}
+        return null;
+    }""")
+
+    if not launched:
+        # Fallback: try the desktop shortcut (matches the _open_control_panel
+        # operator pattern — double-click required for desktop icons).
+        pkg = page.query_selector("text='Package Center'")
+        if pkg and pkg.is_visible():
+            pkg.dblclick(force=True)
+            launched = "desktop_shortcut"
+
+    if not launched:
+        _screenshot(page, "ds-02-launch-failed")
+        msg = (
+            "Could not launch Package Center via SYNO.SDS.AppLaunch or "
+            "desktop shortcut. DSM UI may have changed."
+        )
+        raise RuntimeError(msg)
+
+    print(f"    Launched Package Center via {launched}")
+    # Package Center needs time to initialize on first launch (catalog
+    # fetch over HTTP). Wait longer than other windows.
+    time.sleep(10)
     _screenshot(page, "ds-02-package-center-open")
 
     # Search for Download Station
