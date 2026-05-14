@@ -577,294 +577,67 @@ def _verify_setup_via_api(base_url: str, username: str, password: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Download Station install via Package Center UI
+# Download Station install via synopkg (SSH)
 # ---------------------------------------------------------------------------
 
 
-def _install_download_station_via_ui(
-    page: Any,
+def _install_download_station_via_ssh(
+    host: str,
+    ssh_port: int,
+    admin_password: str,
+    *,
     install_timeout_sec: int = 300,
 ) -> None:
-    """Install the Download Station package via DSM Package Center UI.
+    """Install Download Station via synopkg over SSH.
 
-    Required at golden-image bake time because:
-    - The vdsm base image doesn't ship Download Station
-    - Test cases in tests/vdsm/test_vdsm_downloadstation.py need DS installed
-      to register tools against the live API
+    Replaces the original Playwright/Package-Center UI flow, which proved
+    unreliable on Synology's heavily customized DSM 7 Package Center: the
+    Terms of Service modal uses a syno-ux checkbox rendered as an
+    <input type="button"> whose value is driven entirely by Ext 3.4.1's
+    component model, and no combination of JS .click(), CDP mouse events,
+    or scoped Playwright locators in 8 local iterations dismissed it.
+    The handoff plan flagged this fallback for the case "we burn 2-3
+    iterations without progress" — SSH bypasses the UI surface entirely
+    and uses the same `_ssh` helper proven for share creation.
 
-    Operator flow (mirrored here):
-      1. Click Package Center desktop shortcut (or open via Main Menu)
-      2. Search "Download Station"
-      3. Click Install on the search result
-      4. Accept any license / permission dialog
-      5. Wait for "Installed" state (can take 1-3 minutes; download is fetched
-         from Synology's package server, so this step requires outbound HTTP)
-
-    install_timeout_sec defaults to 300 (5 min) because cold-cache installs
-    can be slow on CI runners. Bake-time only — subsequent test runs restore
-    from the golden image.
+    Idempotent: returns early if DownloadStation is already in
+    `synopkg list`'s output, so a re-run of the bake against a cached
+    image doesn't try to re-install.
     """
-    print("    Opening Package Center...")
-    _screenshot(page, "ds-01-before-package-center")
 
-    # Clear popups left over from prior steps (mirrors what _open_control_panel
-    # does). The user-creation step leaves Control Panel open in the foreground,
-    # which occluded the desktop in the first CI attempt — a desktop-shortcut
-    # search returned nothing, and the Main Menu fallback selector was wrong.
-    _dismiss_all_popups(page)
+    def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
+        return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
 
-    # Launch Package Center via DSM's internal AppLaunch API. This is the
-    # canonical mechanism DSM apps use to launch each other and works
-    # regardless of which window is currently in focus — no UI scraping, no
-    # taskbar selector. The internal app id for Package Center is
-    # SYNO.SDS.PkgManApp.Instance.
-    launched = page.evaluate("""() => {
-        try {
-            if (window.SYNO && window.SYNO.SDS && window.SYNO.SDS.AppLaunch) {
-                window.SYNO.SDS.AppLaunch('SYNO.SDS.PkgManApp.Instance');
-                return 'app_launch';
-            }
-        } catch (e) {}
-        return null;
-    }""")
-
-    if not launched:
-        # Fallback: try the desktop shortcut (matches the _open_control_panel
-        # operator pattern — double-click required for desktop icons).
-        pkg = page.query_selector("text='Package Center'")
-        if pkg and pkg.is_visible():
-            pkg.dblclick(force=True)
-            launched = "desktop_shortcut"
-
-    if not launched:
-        _screenshot(page, "ds-02-launch-failed")
-        msg = (
-            "Could not launch Package Center via SYNO.SDS.AppLaunch or "
-            "desktop shortcut. DSM UI may have changed."
-        )
-        raise RuntimeError(msg)
-
-    print(f"    Launched Package Center via {launched}")
-    # Package Center needs time to initialize on first launch (catalog
-    # fetch over HTTP). Wait longer than other windows.
-    time.sleep(10)
-    _screenshot(page, "ds-02-package-center-open")
-
-    # DSM 7 Package Center shows a Terms of Service modal on first launch
-    # that blocks everything underneath. Earlier CI iterations clicked
-    # through to the search results and Install button visually, but the
-    # clicks were all eaten by the modal's overlay — the install never
-    # actually started. Detect the ToS, check the agreement box, click
-    # OK/Apply to close it.
-    tos_visible = page.evaluate(
-        """() => {
-            return [...document.querySelectorAll('div, span, h1, h2')].some(
-                el => el.textContent && el.textContent.includes('Terms of Service')
-                      && el.offsetParent !== null
-            );
-        }"""
+    # Idempotency check
+    rc, out = ssh("/usr/syno/bin/synopkg list --name DownloadStation", sudo=False)
+    if rc == 0 and "DownloadStation" in out:
+        print("    Download Station already installed")
+        return
+    # Probe the binary location — synopkg lives under /usr/syno/bin on DSM
+    # but the SSH-default PATH may not include it.
+    rc, out = ssh("which synopkg || ls /usr/syno/bin/synopkg")
+    print(f"    synopkg location: rc={rc} out={out.strip()}")
+    # install_from_server downloads the .spk from packages.synology.com.
+    # This requires outbound HTTPS from the vdsm container — should work
+    # in CI; if not, we'll see a clear network error here instead of the
+    # silent UI-eaten-clicks failure mode.
+    print("    Running synopkg install_from_server DownloadStation...")
+    start = time.monotonic()
+    rc, out = ssh(
+        "/usr/syno/bin/synopkg install_from_server DownloadStation",
+        sudo=True,
     )
-    if tos_visible:
-        print("    Detected Package Center Terms of Service modal; accepting...")
-        _screenshot(page, "ds-02a-tos-shown")
-        # DSM 7 Package Center renders the agreement as an ExtJS x-form-cb-wrap.
-        # JS .click() on the label text does NOT toggle Ext checkboxes — Ext binds
-        # mousedown/click on the wrapper or input, not the label. We walk up from
-        # the label text to the cb-wrapper, then click the input inside it; if
-        # the wrapper isn't found we dump the ancestor chain so the next CI run
-        # has actionable evidence.
-        tick_result = page.evaluate(
-            """() => {
-                const all = [...document.querySelectorAll('*')];
-                const textEl = all.find(
-                    e => e.textContent
-                         && e.textContent.includes('I have read and agreed')
-                         && e.offsetParent !== null
-                         && e.children.length === 0
-                );
-                if (!textEl) return {found: false, reason: 'no-text-leaf'};
-                let cur = textEl;
-                const trail = [];
-                for (let i = 0; i < 12 && cur; i++) {
-                    trail.push({
-                        tag: cur.tagName,
-                        cls: (cur.className && cur.className.toString) ? cur.className.toString() : '',
-                        id: cur.id || '',
-                    });
-                    const cls = trail[trail.length - 1].cls;
-                    if (cls.includes('x-form-cb-wrap')
-                        || cls.includes('x-form-cb-checker')
-                        || cls.includes('x-form-checkbox')) {
-                        const input = cur.querySelector('input');
-                        if (input) {
-                            input.click();
-                            return {found: true, target: 'input',
-                                    tag: input.tagName, cls: input.className,
-                                    checked: input.checked,
-                                    wrapperCls: cls};
-                        }
-                        cur.click();
-                        return {found: true, target: 'wrapper',
-                                tag: cur.tagName, cls: cls};
-                    }
-                    cur = cur.parentElement;
-                }
-                return {found: false, reason: 'no-cb-ancestor', trail: trail};
-            }"""
-        )
-        print(f"    Checkbox click result: {tick_result}")
-        if not tick_result.get("found"):
-            _screenshot(page, "ds-02b-tos-checkbox-not-found")
-            msg = (
-                "Could not locate the ToS checkbox wrapper. "
-                f"Diagnostic trail: {tick_result}"
-            )
-            raise RuntimeError(msg)
-        time.sleep(1)
-        _screenshot(page, "ds-02b-tos-checked")
-
-        # Verify the checkbox actually flipped state before clicking Accept.
-        # The Ext class 'x-form-cb-checked' lives on the wrapper when ticked;
-        # we also check the native input's `checked` property as a backup.
-        ticked = page.evaluate(
-            """() => {
-                const wrap = document.querySelector(
-                    '.x-form-cb-wrap.x-form-cb-checked, .x-form-cb-checker.x-form-cb-checked'
-                );
-                if (wrap && wrap.offsetParent !== null) return 'class';
-                const inputs = [...document.querySelectorAll('input')];
-                const hit = inputs.find(i => i.checked && i.offsetParent !== null);
-                return hit ? 'input-checked' : false;
-            }"""
-        )
-        print(f"    Post-click checkbox state: {ticked}")
-        if not ticked:
-            _screenshot(page, "ds-02b-tos-checkbox-still-unchecked")
-            msg = (
-                "Clicked the ToS checkbox wrapper but checkbox state did not flip. "
-                "ExtJS click handler may need a different target (try mousedown/mouseup pair)."
-            )
-            raise RuntimeError(msg)
-
-        # Click the primary action button using the project's _click_text
-        # helper — it walks a/button/span/div/p/label and is ExtJS-aware
-        # (ExtJS buttons render their text inside <span class="x-btn-inner">).
-        # Generic Playwright button:has-text() doesn't match ExtJS button
-        # structure reliably; _click_text does.
-        button_clicked = False
-        for label in ("OK", "Apply", "Agree", "Accept", "Submit"):
-            if _click_text(page, label, timeout=2):
-                print(f"    Clicked '{label}' on ToS modal")
-                button_clicked = True
-                break
-        if not button_clicked:
-            _screenshot(page, "ds-02c-tos-button-missing")
-            msg = (
-                "Ticked ToS checkbox but could not find primary action button "
-                "(OK/Apply/Agree/Accept/Submit) — DSM UI may have changed."
-            )
-            raise RuntimeError(msg)
-        time.sleep(3)
-        _screenshot(page, "ds-02c-tos-accepted")
-
-        # Defensive: confirm the modal actually went away before continuing.
-        # If the click didn't dismiss it (disabled OK button because the
-        # checkbox tick didn't register), we'd otherwise loop right back into
-        # the same 5-minute install poll.
-        still_present = page.evaluate(
-            """() => {
-                return [...document.querySelectorAll('div, span, h1, h2')].some(
-                    el => el.textContent
-                          && el.textContent.includes('Terms of Service')
-                          && el.offsetParent !== null
-                );
-            }"""
-        )
-        if still_present:
-            _screenshot(page, "ds-02d-tos-still-shown")
-            msg = (
-                "Clicked ToS action button but the modal is still visible. "
-                "Checkbox tick may not have registered, or OK button is still disabled."
-            )
-            raise RuntimeError(msg)
-    else:
-        print("    No Terms of Service modal — proceeding directly")
-
-    # Search for Download Station
-    print("    Searching for Download Station...")
-    search_input = page.locator("input[placeholder*='Search'], input[aria-label*='Search']").first
-    search_input.click(force=True)
-    search_input.type("Download Station", delay=50)
-    time.sleep(3)
-    _screenshot(page, "ds-03-search-results")
-
-    # Click Install on the Download Station card. The button label is "Install"
-    # for not-yet-installed packages; if the bake re-runs on an image that
-    # already has DS, we'll see "Open" or "Run" instead — short-circuit.
-    install_btn = page.query_selector("button:has-text('Install')")
-    if not install_btn or not install_btn.is_visible():
-        # Already installed — nothing to do.
-        already = page.query_selector("button:has-text('Open'), button:has-text('Run')")
-        if already and already.is_visible():
-            print("    Download Station already installed — skipping install")
-            _screenshot(page, "ds-04-already-installed")
-            return
-        # Neither Install nor Open visible — something's wrong.
-        _screenshot(page, "ds-04-install-button-missing")
-        msg = "Could not find Install button or installed marker for Download Station"
+    elapsed = int(time.monotonic() - start)
+    if rc != 0:
+        msg = f"synopkg install_from_server failed after {elapsed}s (rc={rc}): {out.strip()}"
         raise RuntimeError(msg)
-
-    install_btn.click(force=True)
-    time.sleep(3)
-    _screenshot(page, "ds-05-install-clicked")
-
-    # Accept any license / configuration wizard dialogs. DSM 7's Package Center
-    # may show: (a) volume selection if multiple volumes exist (vdsm has one),
-    # (b) license agreement, (c) confirmation dialog. Walk through them by
-    # clicking the primary action button repeatedly. Expanded button-label
-    # set after the first CI iteration timed out without seeing the Open/Run
-    # marker — the previous walker's labels (Next/Agree/Apply/Done/Continue)
-    # missed Confirm/OK/Yes/Install which DSM 7 uses on package-install
-    # confirmation dialogs.
-    time.sleep(3)  # Give the first dialog a moment to appear before polling
-    for step in range(10):
-        time.sleep(2)
-        next_btn = page.query_selector(
-            "button:has-text('Next'), button:has-text('Agree'), "
-            "button:has-text('Apply'), button:has-text('Done'), "
-            "button:has-text('Continue'), button:has-text('Confirm'), "
-            "button:has-text('OK'), button:has-text('Yes'), "
-            "button:has-text('Install')"
-        )
-        if next_btn and next_btn.is_visible():
-            next_btn.click(force=True)
-            _screenshot(page, f"ds-06-dialog-step-{step}")
-        else:
-            break
-
-    # Wait for installation to complete. Poll for the "Run" / "Open" button
-    # which replaces "Install" once the package is available. NOTE: do NOT
-    # mix Playwright's text= selector engine into a CSS list — that fails at
-    # parse time. :has-text() is CSS-compatible and sufficient here.
-    print(f"    Waiting for Download Station install to complete (up to {install_timeout_sec}s)...")
-    deadline = time.time() + install_timeout_sec
-    poll_iter = 0
-    while time.time() < deadline:
-        time.sleep(5)
-        installed = page.query_selector("button:has-text('Open'), button:has-text('Run')")
-        if installed and installed.is_visible():
-            print("    Download Station installed successfully")
-            _screenshot(page, "ds-07-install-complete")
-            return
-        # Periodic screenshots during the wait so post-mortem diagnostics
-        # show install progress (or stall point) without needing local repro.
-        poll_iter += 1
-        if poll_iter % 12 == 0:  # every ~60s
-            _screenshot(page, f"ds-07-install-progress-{poll_iter * 5}s")
-
-    _screenshot(page, "ds-07-install-timeout")
-    msg = f"Download Station install did not complete within {install_timeout_sec}s"
-    raise TimeoutError(msg)
+    print(f"    synopkg install completed in {elapsed}s: {out.strip()[:200]}")
+    # Verify by listing again
+    rc, out = ssh("/usr/syno/bin/synopkg list --name DownloadStation", sudo=False)
+    if "DownloadStation" not in out:
+        msg = f"DownloadStation not in package list after install: {out.strip()[:200]}"
+        raise RuntimeError(msg)
+    print("    Download Station installed and verified.")
 
 
 # ---------------------------------------------------------------------------
@@ -1019,19 +792,23 @@ def setup_dsm_for_testing(
             _open_control_panel(page)
             _create_user_via_ui(page, DEFAULT_TEST_USER, DEFAULT_TEST_PASSWORD)
 
-            print("\n  [3/6] Installing Download Station via Package Center...")
-            _install_download_station_via_ui(page)
-
         except Exception:
             _screenshot(page, "error-state")
             raise
         finally:
             browser.close()
 
-    # 2. Enable SSH and create shared folders via synoshare in the DSM guest
+    # 2. Enable SSH, install Download Station, create shared folders,
+    # configure DS — all via the SSH/CLI surface so we never touch
+    # Synology's customized Package Center UI (which proved unautomatable
+    # over Ext 3.4.1's component model in 8 local iterations — see
+    # _install_download_station_via_ssh docstring).
     if ssh_port:
-        print("\n  [4/6] Enabling SSH...")
+        print("\n  [3/6] Enabling SSH...")
         _enable_ssh(base_url, admin_user, admin_password)
+
+        print("\n  [4/6] Installing Download Station via synopkg (SSH)...")
+        _install_download_station_via_ssh(ssh_host, ssh_port, admin_password)
 
         print("\n  [5/6] Creating shared folders and test data via SSH...")
         _create_shared_folders_via_ssh(
@@ -1050,12 +827,10 @@ def setup_dsm_for_testing(
             default_destination="writable",
         )
     else:
-        print("\n  [4/6] No SSH port — skipping share creation")
-        print(
-            "  [5/6] No SSH port — skipping DS configuration"
-            " (default destination needs an existing share)"
-        )
-        print("  [6/6] Skipped")
+        print("\n  [3/6] No SSH port — skipping SSH setup")
+        print("  [4/6] No SSH port — skipping DS install")
+        print("  [5/6] No SSH port — skipping shares")
+        print("  [6/6] No SSH port — skipping DS config")
 
     # Verify — check both admin and test user can see shares
     print("\n  Verifying setup...")
