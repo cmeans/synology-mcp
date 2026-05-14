@@ -667,29 +667,84 @@ def _install_download_station_via_ui(
     if tos_visible:
         print("    Detected Package Center Terms of Service modal; accepting...")
         _screenshot(page, "ds-02a-tos-shown")
-        # DSM 7's ExtJS UI doesn't render checkboxes as real <input type=checkbox>
-        # elements — there's a styled <div> wrapper with the native input hidden.
-        # The reliable way to toggle the checkbox is to click its LABEL text.
-        label_clicked = page.evaluate(
+        # DSM 7 Package Center renders the agreement as an ExtJS x-form-cb-wrap.
+        # JS .click() on the label text does NOT toggle Ext checkboxes — Ext binds
+        # mousedown/click on the wrapper or input, not the label. We walk up from
+        # the label text to the cb-wrapper, then click the input inside it; if
+        # the wrapper isn't found we dump the ancestor chain so the next CI run
+        # has actionable evidence.
+        tick_result = page.evaluate(
             """() => {
-                const els = [...document.querySelectorAll('label, span, div, td')];
-                // Use substring match — DSM wording varies slightly (with/without
-                // trailing period, "Service" vs "Services", etc.)
-                const el = els.find(
+                const all = [...document.querySelectorAll('*')];
+                const textEl = all.find(
                     e => e.textContent
                          && e.textContent.includes('I have read and agreed')
                          && e.offsetParent !== null
+                         && e.children.length === 0
                 );
-                if (el) { el.click(); return true; }
-                return false;
+                if (!textEl) return {found: false, reason: 'no-text-leaf'};
+                let cur = textEl;
+                const trail = [];
+                for (let i = 0; i < 12 && cur; i++) {
+                    trail.push({
+                        tag: cur.tagName,
+                        cls: (cur.className && cur.className.toString) ? cur.className.toString() : '',
+                        id: cur.id || '',
+                    });
+                    const cls = trail[trail.length - 1].cls;
+                    if (cls.includes('x-form-cb-wrap')
+                        || cls.includes('x-form-cb-checker')
+                        || cls.includes('x-form-checkbox')) {
+                        const input = cur.querySelector('input');
+                        if (input) {
+                            input.click();
+                            return {found: true, target: 'input',
+                                    tag: input.tagName, cls: input.className,
+                                    checked: input.checked,
+                                    wrapperCls: cls};
+                        }
+                        cur.click();
+                        return {found: true, target: 'wrapper',
+                                tag: cur.tagName, cls: cls};
+                    }
+                    cur = cur.parentElement;
+                }
+                return {found: false, reason: 'no-cb-ancestor', trail: trail};
             }"""
         )
-        if label_clicked:
-            print("    Ticked ToS agreement checkbox")
-        else:
-            print("    WARNING: could not find ToS agreement checkbox label")
+        print(f"    Checkbox click result: {tick_result}")
+        if not tick_result.get("found"):
+            _screenshot(page, "ds-02b-tos-checkbox-not-found")
+            msg = (
+                "Could not locate the ToS checkbox wrapper. "
+                f"Diagnostic trail: {tick_result}"
+            )
+            raise RuntimeError(msg)
         time.sleep(1)
         _screenshot(page, "ds-02b-tos-checked")
+
+        # Verify the checkbox actually flipped state before clicking Accept.
+        # The Ext class 'x-form-cb-checked' lives on the wrapper when ticked;
+        # we also check the native input's `checked` property as a backup.
+        ticked = page.evaluate(
+            """() => {
+                const wrap = document.querySelector(
+                    '.x-form-cb-wrap.x-form-cb-checked, .x-form-cb-checker.x-form-cb-checked'
+                );
+                if (wrap && wrap.offsetParent !== null) return 'class';
+                const inputs = [...document.querySelectorAll('input')];
+                const hit = inputs.find(i => i.checked && i.offsetParent !== null);
+                return hit ? 'input-checked' : false;
+            }"""
+        )
+        print(f"    Post-click checkbox state: {ticked}")
+        if not ticked:
+            _screenshot(page, "ds-02b-tos-checkbox-still-unchecked")
+            msg = (
+                "Clicked the ToS checkbox wrapper but checkbox state did not flip. "
+                "ExtJS click handler may need a different target (try mousedown/mouseup pair)."
+            )
+            raise RuntimeError(msg)
 
         # Click the primary action button using the project's _click_text
         # helper — it walks a/button/span/div/p/label and is ExtJS-aware
