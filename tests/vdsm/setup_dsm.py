@@ -617,8 +617,20 @@ def _install_download_station_via_ssh(
     def ssh(cmd: str, *, sudo: bool = True) -> tuple[int, str]:
         return _ssh(host, ssh_port, admin_password, cmd, sudo=sudo)
 
-    def api_has_ds_task() -> bool:
-        """True if SYNO.DownloadStation.Task is registered in the API cache."""
+    # All DS APIs the downstream bake steps + the vdsm tests touch.
+    # Different DS APIs register at different times after start —
+    # Task tends to appear first, Info (used by setconfig at [6/6]) lags.
+    # Gating on the full set avoids the "Task registered but Info isn't"
+    # race that bit CI on 43a2526.
+    required_apis = (
+        "SYNO.DownloadStation.Task",
+        "SYNO.DownloadStation.Info",
+        "SYNO.DownloadStation.Statistic",
+        "SYNO.DownloadStation.Schedule",
+    )
+
+    def missing_ds_apis() -> list[str]:
+        """Return the subset of required DS APIs NOT yet in the API cache."""
         try:
             resp = httpx.get(
                 f"{base_url}/webapi/query.cgi",
@@ -626,19 +638,20 @@ def _install_download_station_via_ssh(
                     "api": "SYNO.API.Info",
                     "version": "1",
                     "method": "query",
-                    "query": "SYNO.DownloadStation.Task",
+                    "query": ",".join(required_apis),
                 },
                 timeout=10,
                 verify=False,  # noqa: S501
             )
-            return bool(resp.json().get("data", {}).get("SYNO.DownloadStation.Task"))
+            data = resp.json().get("data", {})
+            return [api for api in required_apis if not data.get(api)]
         except (httpx.HTTPError, ValueError):
-            return False
+            return list(required_apis)
 
     # Idempotency: a cached golden image rebuilt against an already-DS
-    # image will have the API registered already.
-    if api_has_ds_task():
-        print("    Download Station already running (API cache hit)")
+    # image will have all APIs registered already.
+    if not missing_ds_apis():
+        print("    Download Station already running (all DS APIs in cache)")
         return
     # Install (~3s on a warm Synology package server, 30-60s on cold cache).
     print("    Running synopkg install_from_server DownloadStation...")
@@ -672,20 +685,23 @@ def _install_download_station_via_ssh(
         # No "active" marker — likely failed to start. Surface the output
         # so we can debug; don't silently swallow.
         print(f"    start-stop-status output:\n{out.strip()[:600]}")
-    # Poll the API for SYNO.DownloadStation.Task — this is the ACTUAL gate
-    # that _configure_download_station_via_api needs. synopkg status
-    # keeps reporting stopped on vDSM regardless of actual service state.
-    deadline = time.monotonic() + 60
+    # Poll the API cache for ALL required DS APIs — gating on Task alone
+    # is insufficient because Info (used by setconfig at [6/6]) registers
+    # on a different timeline. synopkg status keeps reporting stopped on
+    # vDSM regardless of actual service state, so it's not a useful gate.
+    deadline = time.monotonic() + 120
+    missing: list[str] = list(required_apis)
     while time.monotonic() < deadline:
-        if api_has_ds_task():
-            print("    SYNO.DownloadStation.Task is registered in DSM API cache.")
+        missing = missing_ds_apis()
+        if not missing:
+            print(f"    All {len(required_apis)} DS APIs registered in DSM API cache.")
             break
         time.sleep(3)
     else:
         msg = (
-            "SYNO.DownloadStation.Task did not appear in the DSM API cache "
-            "within 60s after install + start. Package services may not have "
-            "started — check /var/log/synopkg.log on the NAS."
+            f"DS APIs still missing from cache after 120s: {missing}. "
+            "Package services may not have started — check "
+            "/var/log/synopkg.log on the NAS."
         )
         raise RuntimeError(msg)
     print("    Download Station installed, started, and API-verified.")
